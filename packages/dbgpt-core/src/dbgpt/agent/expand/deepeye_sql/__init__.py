@@ -1,0 +1,60 @@
+"""DeepEye-SQL integration for DB-GPT.
+
+This package implements the DeepEye-SQL pipeline
+(`arXiv:2510.17586 <https://arxiv.org/abs/2510.17586>`_, SIGMOD 2026), a
+software-engineering-inspired Text-to-SQL framework that reframes Text-to-SQL
+as a verifiable SDLC workflow. The pipeline is composed of four stages:
+
+1. **Semantic Value Retrieval** — grounds the user question in the database's
+   actual values (keyword extraction + per-column semantic search).
+2. **Robust Schema Linking** — combines direct, reversed and value-based
+   linking and enforces *relational closure* (PK/FK force-inclusion) over the
+   foreign-key graph.
+3. **N-Version SQL Generation** — three independent generators (skeleton,
+   in-context-learning and divide-and-conquer) run in parallel.
+4. **SQL Unit Testing & Confidence-Aware Selection** — a deterministic
+   tool-chain of eight checkers drives targeted LLM repair, then
+   execution-result clustering plus unbalanced pairwise adjudication selects
+   the final, quality-gated SQL.
+
+Integration points:
+
+* :class:`DeepEyeSQLAgent` — a :class:`~dbgpt.agent.ConversableAgent` that can
+  be bound to a :class:`~dbgpt.agent.resource.database.DBResource`.
+* :func:`build_deepeye_sql_dag` — an AWEL workflow exposing the pipeline over
+  HTTP.
+"""
+
+from .agent import DeepEyeSQLAgent  # noqa: F401
+from .pipeline import DeepEyeSQLPipeline  # noqa: F401
+from .schema_profile import SchemaProfile  # noqa: F401
+from .schemas import (  # noqa: F401
+    CandidateSQL,
+    CheckerReport,
+    DeepEyeSQLResult,
+    LinkedSchema,
+    RetrievedValue,
+    RetrievedValues,
+)
+from .workflow import (  # noqa: F401
+    DeepEyeSQLRequestBody,
+    DeepEyeSQLResponseBody,
+    build_deepeye_sql_dag,
+    set_providers,
+)
+
+__all__ = [
+    "DeepEyeSQLAgent",
+    "DeepEyeSQLPipeline",
+    "SchemaProfile",
+    "CandidateSQL",
+    "CheckerReport",
+    "DeepEyeSQLResult",
+    "LinkedSchema",
+    "RetrievedValue",
+    "RetrievedValues",
+    "build_deepeye_sql_dag",
+    "set_providers",
+    "DeepEyeSQLRequestBody",
+    "DeepEyeSQLResponseBody",
+]
