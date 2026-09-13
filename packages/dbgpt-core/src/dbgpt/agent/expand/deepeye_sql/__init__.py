@@ -26,6 +26,9 @@ Integration points:
 """
 
 from .agent import DeepEyeSQLAgent  # noqa: F401
+from .caching import clear_caches  # noqa: F401
+from .config import DeepEyeSQLConfig  # noqa: F401
+from .few_shot import load_few_shot_examples  # noqa: F401
 from .pipeline import DeepEyeSQLPipeline  # noqa: F401
 from .schema_profile import SchemaProfile  # noqa: F401
 from .schemas import (  # noqa: F401
@@ -36,6 +39,7 @@ from .schemas import (  # noqa: F401
     RetrievedValue,
     RetrievedValues,
 )
+from .value_retrieval import build_value_index  # noqa: F401
 from .workflow import (  # noqa: F401
     DeepEyeSQLRequestBody,
     DeepEyeSQLResponseBody,
@@ -46,6 +50,7 @@ from .workflow import (  # noqa: F401
 __all__ = [
     "DeepEyeSQLAgent",
     "DeepEyeSQLPipeline",
+    "DeepEyeSQLConfig",
     "SchemaProfile",
     "CandidateSQL",
     "CheckerReport",
@@ -55,6 +60,9 @@ __all__ = [
     "RetrievedValues",
     "build_deepeye_sql_dag",
     "set_providers",
+    "clear_caches",
+    "load_few_shot_examples",
+    "build_value_index",
     "DeepEyeSQLRequestBody",
     "DeepEyeSQLResponseBody",
 ]

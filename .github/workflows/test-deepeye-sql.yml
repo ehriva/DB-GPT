@@ -1,0 +1,44 @@
+name: Test DeepEye-SQL
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/dbgpt-core/src/dbgpt/agent/expand/deepeye_sql/**
+      - tests/unit_tests/agent/test_deepeye_sql*.py
+      - .github/workflows/test-deepeye-sql.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/dbgpt-core/src/dbgpt/agent/expand/deepeye_sql/**
+      - tests/unit_tests/agent/test_deepeye_sql*.py
+      - .github/workflows/test-deepeye-sql.yml
+
+concurrency:
+  group: deepeye-sql-${{ github.event.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  test-deepeye-sql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install \
+            -e "packages/dbgpt-core[agent,simple_framework,framework,client]" \
+            -e "packages/dbgpt-ext" \
+            pytest
+
+      - name: Run DeepEye-SQL tests
+        run: |
+          uv run pytest \
+            tests/unit_tests/agent/test_deepeye_sql.py \
+            tests/unit_tests/agent/test_deepeye_sql_integration.py \
+            -v

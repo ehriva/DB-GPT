@@ -53,11 +53,20 @@ class RobustSchemaLinker:
         *,
         value_distance_threshold: float = 0.05,
         sampling_budget: int = 1,
+        direct_sampling_budget: Optional[int] = None,
+        reversed_sampling_budget: Optional[int] = None,
     ):
         self._connector = connector
         self._complete = complete
         self._value_distance_threshold = value_distance_threshold
-        self._sampling_budget = sampling_budget
+        self._direct_sampling_budget = (
+            direct_sampling_budget if direct_sampling_budget is not None else sampling_budget
+        )
+        self._reversed_sampling_budget = (
+            reversed_sampling_budget
+            if reversed_sampling_budget is not None
+            else sampling_budget
+        )
 
     @property
     def dialect(self) -> str:
@@ -105,7 +114,7 @@ class RobustSchemaLinker:
             return t, c
 
         results = await asyncio.gather(
-            *[_sample() for _ in range(self._sampling_budget)]
+            *[_sample() for _ in range(self._direct_sampling_budget)]
         )
         for t, c in results:
             tables |= t
@@ -153,7 +162,7 @@ class RobustSchemaLinker:
 
         drafts = [
             d for d in await asyncio.gather(
-                *[_draft() for _ in range(self._sampling_budget)]
+                *[_draft() for _ in range(self._reversed_sampling_budget)]
             )
             if d
         ]
@@ -206,9 +215,10 @@ class RobustSchemaLinker:
         retrieved: RetrievedValues,
         *,
         few_shot_examples: Optional[List[tuple]] = None,
+        max_schema_tokens: Optional[int] = None,
     ) -> LinkedSchema:
         """Run the robust schema-linking pipeline and enforce closure."""
-        database_schema = profile.render()
+        database_schema = profile.render_with_budget(max_schema_tokens)
 
         async def _value_link_async() -> Dict[str, Set[str]]:
             return self._value_link(retrieved)
@@ -246,7 +256,7 @@ class RobustSchemaLinker:
         return LinkedSchema(
             tables=closure_tables,
             columns=closure_columns,
-            schema_text=linked_profile.render(),
+            schema_text=linked_profile.render_with_budget(max_schema_tokens),
             fk_edges=[
                 (s_t, t_t) for (s_t, _s_c, t_t, _t_c) in linked_profile.foreign_keys
             ],

@@ -82,15 +82,36 @@ Key knobs on `DeepEyeSQLPipeline` / `DeepEyeSQLAgent`:
 * `confidence_threshold` (0.6) — shortcut threshold for the quality gate.
 * `filter_top_k` (2) — candidates carried into low-confidence adjudication.
 
+## Features
+
+* **Embedding-based value retrieval** — `Qwen3-Embedding` (or any
+  sentence-transformers / OpenAI-compatible embedding) with a persistent
+  per-database index (`index_dir`); falls back to a deterministic token-overlap
+  index when no embedding backend is configured.
+* **Dynamic few-shot retrieval** — LLM masking + embedding + top-K cross-domain
+  example retrieval feeds the ICL generator and reversed linker
+  (`few_shot_examples_path`, `num_examples`).
+* **Progressive schema stripping** — `max_schema_tokens` trims value
+  statistics/examples, then descriptions, then truncates, to fit the model
+  context window.
+* **Execution caching + timing refinement** — a per-run LRU execution cache and
+  ±3σ timing re-measurement for selection tie-breaks.
+* **TOML / env config** — all knobs in :class:`DeepEyeSQLConfig`, loadable from
+  a TOML section or `DEEPEYE_SQL_*` env vars.
+* **Dialect-aware date functions** — generation prompts adapt `STRFTIME` /
+  `YEAR` / `EXTRACT` / `DATEPART` to the connector dialect.
+* **Read-only enforcement** — SELECT-only, single-statement execution.
+* **Streaming progress + tracing** — per-stage progress callbacks and
+  `root_tracer` spans.
+* **Cross-conversation caching** — schema profiles and value indices are cached
+  process-wide (`clear_caches()`).
+
 ## Notes / adaptations
 
-* The vector index uses Chroma + an embedding model when available, otherwise a
+* The vector index uses an embedding model when configured, otherwise a
   deterministic in-memory token-overlap index, so the pipeline runs without
   extra dependencies.
 * The ICL generator runs even without a few-shot corpus (with an empty
-  example section); pass `few_shot_examples=[(question, hint, sql), ...]` to
-  inject real cross-domain examples.
-* The reference implementation targets SQLite (Spider/BIRD); prompts render the
-  actual connector dialect so the pipeline works with MySQL/PostgreSQL/etc.,
-  though the SQLite-specific `STRFTIME` hint is retained verbatim for fidelity.
+  example section); configure `few_shot_examples_path` (or pass
+  `few_shot_examples=[(question, hint, sql), ...]`) for cross-domain examples.
 * Execution is SELECT-only and row-bounded (default 100 rows) for safety.

@@ -227,7 +227,7 @@ Here is a high level description of the steps.
 9. **{DIALECT} Functions Only:**
     - Use only functions available in {DIALECT}.
 10. **Date Processing:**
-    - Utilize `STRFTIME()` for date manipulation (e.g., `STRFTIME('%Y', SOMETIME)` to extract the year).
+    - Utilize {DATE_FUNCTION}.
 11. **Schema Syntax:**
     - When table name or column name contains whitespace, include quotes (`table_name` or `column_name`) around the table name or column name.
 12. **Value Examples:**
@@ -476,6 +476,28 @@ Based on the question and the two SQL queries, analyze which query answers the q
 """
 
 
+DIALECT_DATE_FUNCTION = {
+    "sqlite": "STRFTIME('%Y', SOMETIME) to extract the year",
+    "mysql": "YEAR(SOMETIME) to extract the year",
+    "postgresql": "EXTRACT(YEAR FROM SOMETIME) to extract the year",
+    "postgres": "EXTRACT(YEAR FROM SOMETIME) to extract the year",
+    "mssql": "DATEPART(YEAR, SOMETIME) to extract the year",
+    "sqlserver": "DATEPART(YEAR, SOMETIME) to extract the year",
+    "duckdb": "EXTRACT(YEAR FROM SOMETIME) to extract the year",
+    "clickhouse": "toYear(SOMETIME) to extract the year",
+    "oracle": "EXTRACT(YEAR FROM SOMETIME) to extract the year",
+    "snowflake": "YEAR(SOMETIME) to extract the year",
+    "bigquery": "EXTRACT(YEAR FROM SOMETIME) to extract the year",
+}
+
+
+def date_function_for(dialect: str) -> str:
+    """Return a dialect-appropriate date-extraction hint."""
+    return DIALECT_DATE_FUNCTION.get(
+        (dialect or "").lower(), "STRFTIME('%Y', SOMETIME) to extract the year"
+    )
+
+
 def _render(template: str, **kwargs: str) -> str:
     """Render a prompt template, ignoring unused placeholders safely."""
     return template.format(**kwargs)
@@ -521,6 +543,7 @@ def render_generation_prompt(
         return _render(
             DC_SQL_GENERATION_PROMPT,
             DIALECT=dialect,
+            DATE_FUNCTION=date_function_for(dialect),
             DATABASE_SCHEMA=database_schema,
             QUESTION=question,
             HINT=hint,

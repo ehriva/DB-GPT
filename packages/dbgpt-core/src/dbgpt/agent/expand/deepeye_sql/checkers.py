@@ -40,10 +40,18 @@ def classify_result(rows: Optional[List[List[Any]]]) -> str:
     return "success"
 
 
-def _execute(connector: Any, sql: str, max_rows: int):
+def _execute(
+    connector: Any,
+    sql: str,
+    max_rows: int,
+    cache: Any = None,
+    timeout: Optional[float] = None,
+):
     """Execute and return ``(result_type, columns, rows, error)``."""
     try:
-        columns, rows = safe_execute(connector, sql, max_rows=max_rows)
+        columns, rows = safe_execute(
+            connector, sql, max_rows=max_rows, cache=cache, timeout=timeout
+        )
         return classify_result(rows), columns, rows, ""
     except Exception as e:
         return "execution_error", [], None, str(e)
@@ -55,7 +63,12 @@ class BaseChecker:
     name: str = "checker"
 
     def check(
-        self, sql: str, connector: Any, max_rows: int
+        self,
+        sql: str,
+        connector: Any,
+        max_rows: int,
+        cache: Any = None,
+        timeout: Optional[float] = None,
     ) -> CheckerReport:
         raise NotImplementedError
 
@@ -65,8 +78,8 @@ class SyntaxChecker(BaseChecker):
 
     name = "syntax"
 
-    def check(self, sql, connector, max_rows):
-        result_type, _, _, error = _execute(connector, sql, max_rows)
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
+        result_type, _, _, error = _execute(connector, sql, max_rows, cache, timeout)
         if result_type in ("success", "empty_result", "all_null_result"):
             return CheckerReport(self.name, True)
         return CheckerReport(
@@ -90,7 +103,7 @@ class JoinChecker(BaseChecker):
         re.IGNORECASE | re.DOTALL,
     )
 
-    def check(self, sql, connector, max_rows):
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
         if self._RE.search(sql):
             return CheckerReport(
                 self.name,
@@ -116,7 +129,7 @@ class OrderByLimitChecker(BaseChecker):
         re.IGNORECASE | re.DOTALL,
     )
 
-    def check(self, sql, connector, max_rows):
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
         match = self._RE.search(sql)
         if match:
             matched = match.group(1)
@@ -140,7 +153,7 @@ class TimeChecker(BaseChecker):
 
     name = "time"
 
-    def check(self, sql, connector, max_rows):
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
         res = re.sub(
             r"(strftime *\([^\(]*?\) *[>=<]+ *)(\d{4,})", r"\1'\2'", sql
         )
@@ -158,7 +171,7 @@ class SelectChecker(BaseChecker):
         rf"^SELECT.*? ({_IDENT}\.\*).*?FROM", re.IGNORECASE | re.DOTALL
     )
 
-    def check(self, sql, connector, max_rows):
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
         pre_fixed = sql.replace("|| ' ' ||", ", ").replace("|| ', ' ||", ", ")
         changed = pre_fixed != sql
         if changed:
@@ -197,7 +210,7 @@ class MaxMinChecker(BaseChecker):
         re.IGNORECASE | re.DOTALL,
     )
 
-    def check(self, sql, connector, max_rows):
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
         m = self._NESTED_RE.search(sql)
         if m:
             func, col, table = m.group(1), m.group(2), m.group(3)
@@ -238,7 +251,7 @@ class OrderByNullChecker(BaseChecker):
 
     _RE = re.compile(r"ORDER BY .*?(?<!DESC )LIMIT +\d+;{0,1}", re.IGNORECASE | re.DOTALL)
 
-    def check(self, sql, connector, max_rows):
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
         for match in self._RE.finditer(sql):
             fragment = match.group(0)
             if "SUM(" in fragment.upper() or "COUNT(" in fragment.upper():
@@ -259,8 +272,8 @@ class ResultChecker(BaseChecker):
 
     name = "result"
 
-    def check(self, sql, connector, max_rows):
-        result_type, _, _, error = _execute(connector, sql, max_rows)
+    def check(self, sql, connector, max_rows, cache=None, timeout=None):
+        result_type, _, _, error = _execute(connector, sql, max_rows, cache, timeout)
         if result_type == "success":
             return CheckerReport(self.name, True)
         return CheckerReport(
@@ -295,6 +308,8 @@ class SQLToolChain:
         *,
         checker_sampling_budget: int = 1,
         max_rows: int = 100,
+        cache: Any = None,
+        timeout: Optional[float] = None,
     ):
         self._connector = connector
         self._complete = complete
@@ -303,6 +318,8 @@ class SQLToolChain:
         self._database_schema = database_schema
         self._checker_sampling_budget = checker_sampling_budget
         self._max_rows = max_rows
+        self._cache = cache
+        self._timeout = timeout
 
     @property
     def dialect(self) -> str:
@@ -336,7 +353,7 @@ class SQLToolChain:
             if not new_sql:
                 continue
             result_type, _, rows, _ = _execute(
-                self._connector, new_sql, self._max_rows
+                self._connector, new_sql, self._max_rows, self._cache, self._timeout
             )
             if result_type in valid_types:
                 valid.append((new_sql, hash_result(rows or [])))
@@ -373,7 +390,9 @@ class SQLToolChain:
         """Run the single-pass checker chain, mutating the SQL as needed."""
         for checker_cls in self.CHECKERS:
             checker = checker_cls()
-            report = checker.check(sql, self._connector, self._max_rows)
+            report = checker.check(
+                sql, self._connector, self._max_rows, self._cache, self._timeout
+            )
             if report.passed:
                 continue
             if report.rewritten_sql:
@@ -411,7 +430,7 @@ class SQLToolChain:
             norm = " ".join(cand.sql.split()).strip().lower()
             cand.sql = revised_map.get(norm, cand.sql)
             result_type, columns, rows, error = _execute(
-                self._connector, cand.sql, self._max_rows
+                self._connector, cand.sql, self._max_rows, self._cache, self._timeout
             )
             cand.passed = result_type != "execution_error"
             cand.result_columns = columns

@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional
 from dbgpt._private.pydantic import BaseModel, Field
 from dbgpt.core.awel import DAG, HttpTrigger, MapOperator
 
+from .config import DeepEyeSQLConfig
 from .pipeline import DeepEyeSQLPipeline
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 # cannot close over arbitrary objects in the map function).
 _connector_provider: Optional[Callable[[Optional[str]], Any]] = None
 _llm_provider: Optional[Callable[[], Any]] = None
+_config: Optional[DeepEyeSQLConfig] = None
 
 
 class DeepEyeSQLRequestBody(BaseModel):
@@ -46,6 +48,7 @@ class DeepEyeSQLResponseBody(BaseModel):
 def set_providers(
     connector_provider: Callable[[Optional[str]], Any],
     llm_provider: Callable[[], Any],
+    config: Optional[DeepEyeSQLConfig] = None,
 ) -> None:
     """Register the connector and LLM providers for the AWEL workflow.
 
@@ -56,10 +59,12 @@ def set_providers(
             ``LLMComplete`` (anything exposing ``async complete(...)``) or a
             DB-GPT ``AIWrapper`` together with a model name, e.g. a
             ``(wrapper, model_name)`` tuple.
+        config: Optional :class:`DeepEyeSQLConfig`.
     """
-    global _connector_provider, _llm_provider
+    global _connector_provider, _llm_provider, _config
     _connector_provider = connector_provider
     _llm_provider = llm_provider
+    _config = config
 
 
 async def _run_deepeye(body: DeepEyeSQLRequestBody) -> dict:
@@ -72,7 +77,7 @@ async def _run_deepeye(body: DeepEyeSQLRequestBody) -> dict:
     model_name = None
     if isinstance(llm, (tuple, list)):
         llm, model_name = llm[0], llm[1]
-    pipeline = DeepEyeSQLPipeline(connector, llm, model_name=model_name)
+    pipeline = DeepEyeSQLPipeline(connector, llm, config=_config, model_name=model_name)
     result = await pipeline.run(body.query, hint=body.hint or "")
     return result.to_dict()
 
@@ -82,9 +87,10 @@ def build_deepeye_sql_dag(
     llm_provider: Callable[[], Any],
     *,
     endpoint: str = "/api/v1/deepeye_sql",
+    config: Optional[DeepEyeSQLConfig] = None,
 ) -> DAG:
     """Build the AWEL DAG exposing the DeepEye-SQL pipeline over HTTP."""
-    set_providers(connector_provider, llm_provider)
+    set_providers(connector_provider, llm_provider, config)
     with DAG("deepeye_sql_pipeline_dag") as dag:
         trigger = HttpTrigger(
             endpoint=endpoint,

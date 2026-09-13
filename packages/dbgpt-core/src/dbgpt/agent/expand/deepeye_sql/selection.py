@@ -15,7 +15,7 @@ import time
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
-from .execution import safe_execute
+from .execution import measure_execution_time, safe_execute
 from .llm import LLMComplete
 from .prompts import render_pair_selection
 from .schemas import CandidateSQL
@@ -55,6 +55,8 @@ class ConfidenceAwareSelector:
         filter_top_k: int = _DEFAULT_FILTER_TOP_K,
         evaluator_sampling_budget: int = _DEFAULT_EVALUATOR_BUDGET,
         max_rows: int = _DEFAULT_MAX_ROWS,
+        cache: Any = None,
+        timeout: Optional[float] = None,
     ):
         self._connector = connector
         self._complete = complete
@@ -65,6 +67,8 @@ class ConfidenceAwareSelector:
         self._filter_top_k = filter_top_k
         self._evaluator_budget = evaluator_sampling_budget
         self._max_rows = max_rows
+        self._cache = cache
+        self._timeout = timeout
 
     async def select(
         self, candidates: List[CandidateSQL]
@@ -92,7 +96,11 @@ class ConfidenceAwareSelector:
             try:
                 start = time.perf_counter()
                 columns, rows = safe_execute(
-                    self._connector, cand.sql, max_rows=self._max_rows
+                    self._connector,
+                    cand.sql,
+                    max_rows=self._max_rows,
+                    cache=self._cache,
+                    timeout=self._timeout,
                 )
                 cand.result_columns = columns
                 cand.result_rows = rows
@@ -126,7 +134,25 @@ class ConfidenceAwareSelector:
                 getattr(c, "exec_time", float("inf")),
             ),
         )
-        return ranked
+
+        # Re-measure execution time for tied consistency scores that appear in
+        # the top-K (reference: `_refine_relevant_tied_candidate_timings`).
+        top_scores = [c.confidence for c in ranked[: self._filter_top_k]]
+        for cand in ranked:
+            if (
+                cand.confidence in top_scores
+                and sum(1 for c in ranked if c.confidence == cand.confidence) > 1
+            ):
+                cand.exec_time = measure_execution_time(
+                    self._connector, cand.sql, max_rows=self._max_rows
+                )
+        return sorted(
+            ranked,
+            key=lambda c: (
+                -(c.confidence or 0.0),
+                getattr(c, "exec_time", float("inf")),
+            ),
+        )
 
     async def _pairwise_adjudication(
         self, top_k: List[CandidateSQL]

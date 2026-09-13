@@ -20,12 +20,22 @@ from ..core.agent import Agent, AgentMessage
 from ..core.base_agent import ConversableAgent
 from ..core.profile import DynConfig, ProfileConfig
 from ..resource.database import DBResource
+from .config import DeepEyeSQLConfig
 from .pipeline import DeepEyeSQLPipeline
 from .schemas import DeepEyeSQLResult
 
 logger = logging.getLogger(__name__)
 
 _RESULT_PREVIEW_ROWS = 20
+
+_STAGE_LABELS = {
+    "value_retrieval": "Retrieving relevant database values",
+    "few_shot": "Retrieving few-shot examples",
+    "schema_linking": "Linking relevant schema",
+    "generation": "Generating SQL candidates",
+    "verification": "Verifying and repairing SQL",
+    "selection": "Selecting the best SQL",
+}
 
 
 class DeepEyeSQLAgent(ConversableAgent):
@@ -70,6 +80,7 @@ class DeepEyeSQLAgent(ConversableAgent):
     )
 
     # --- Pipeline configuration ------------------------------------------
+    config: Optional[DeepEyeSQLConfig] = None
     temperature: float = 0.7
     confidence_threshold: float = 0.6
     sampling_budget: int = 1
@@ -137,8 +148,26 @@ class DeepEyeSQLAgent(ConversableAgent):
         stream_callback=None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """Return the user question directly; the pipeline does its own LLM calls."""
+        # Stash the stream callback so `act` can emit pipeline-stage progress.
+        object.__setattr__(self, "_llm_stream_callback", stream_callback)
         question = messages[-1].content if messages else ""
         return question, None
+
+    def _make_progress_callback(self):
+        cb = getattr(self, "_llm_stream_callback", None)
+        if cb is None:
+            return None
+
+        async def _progress(stage: str, payload) -> None:
+            label = _STAGE_LABELS.get(stage, stage)
+            status = (payload or {}).get("status", "")
+            text = f"🔍 {label}..." if status == "start" else f"✅ {label}"
+            try:
+                await cb({"delta_text": text, "delta_thinking": ""})
+            except Exception:  # pragma: no cover - progress is best-effort
+                logger.debug("progress callback error", exc_info=True)
+
+        return _progress
 
     async def act(
         self,
@@ -156,7 +185,10 @@ class DeepEyeSQLAgent(ConversableAgent):
         model_name = await self._a_select_llm_model()
         pipeline = await self._get_pipeline(model_name)
         result = await pipeline.run(
-            question, hint="", few_shot_examples=self.few_shot_examples
+            question,
+            hint="",
+            few_shot_examples=self.few_shot_examples,
+            progress_callback=self._make_progress_callback(),
         )
         content = _format_result(result)
         return ActionOutput(
@@ -182,6 +214,7 @@ class DeepEyeSQLAgent(ConversableAgent):
             cache[model_name] = DeepEyeSQLPipeline(
                 self.connector,
                 self.llm_client,
+                config=self.config,
                 model_name=model_name,
                 conv_id=self.not_null_agent_context.conv_id,
                 temperature=self.temperature,

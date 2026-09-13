@@ -241,6 +241,7 @@ class SchemaProfile:
         *,
         include_stats: bool = True,
         include_examples: bool = True,
+        include_descriptions: bool = True,
     ) -> str:
         """Render the profile in the DeepEye-SQL prompt format."""
         lines: List[str] = []
@@ -250,7 +251,11 @@ class SchemaProfile:
             tinfo = self.tables[table_name]
             col_parts = []
             for cinfo in tinfo.ordered_columns():
-                col_parts.append(self._render_column(cinfo, include_stats, include_examples))
+                col_parts.append(
+                    self._render_column(
+                        cinfo, include_stats, include_examples, include_descriptions
+                    )
+                )
             cols_str = ",\n".join(col_parts)
             lines.append(f"- Table: `{table_name}` [\n{cols_str}\n]")
         if self.foreign_keys:
@@ -259,13 +264,38 @@ class SchemaProfile:
                 lines.append(f"`{s_t}`.`{s_c}` = `{t_t}`.`{t_c}`")
         return "\n".join(lines)
 
+    def render_with_budget(self, max_tokens: Optional[int] = None) -> str:
+        """Render the profile, progressively stripping detail to fit a budget.
+
+        Stripping order mirrors the reference implementation: full → drop
+        value statistics + examples → drop descriptions → hard truncation.
+        """
+        if max_tokens is None:
+            return self.render()
+        full = self.render()
+        if estimate_tokens(full) <= max_tokens:
+            return full
+        no_stats = self.render(include_stats=False, include_examples=False)
+        if estimate_tokens(no_stats) <= max_tokens:
+            return no_stats
+        minimal = self.render(
+            include_stats=False, include_examples=False, include_descriptions=False
+        )
+        if estimate_tokens(minimal) <= max_tokens:
+            return minimal
+        return _truncate_to_tokens(minimal, max_tokens)
+
     def _render_column(
-        self, cinfo: ColumnInfo, include_stats: bool, include_examples: bool
+        self,
+        cinfo: ColumnInfo,
+        include_stats: bool,
+        include_examples: bool,
+        include_descriptions: bool,
     ) -> str:
         segs = [f"`{cinfo.name}`: {cinfo.type}"]
         if cinfo.primary_key:
             segs.append("Primary Key")
-        if cinfo.description:
+        if include_descriptions and cinfo.description:
             segs.append(cinfo.description)
         if include_stats and cinfo.value_statistics:
             s = cinfo.value_statistics
@@ -277,6 +307,19 @@ class SchemaProfile:
             examples = ", ".join(repr(v) for v in cinfo.value_examples)
             segs.append(f"Value Examples: [{examples}]")
         return "  ( " + " | ".join(segs) + " )"
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate (4 chars ≈ 1 token)."""
+    return len(text) // 4
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Hard-truncate a text to approximately ``max_tokens`` tokens."""
+    approx_chars = max(1, max_tokens) * 4
+    if len(text) <= approx_chars:
+        return text
+    return text[:approx_chars] + "\n... (schema truncated)"
 
 
 # ---------------------------------------------------------------------------
