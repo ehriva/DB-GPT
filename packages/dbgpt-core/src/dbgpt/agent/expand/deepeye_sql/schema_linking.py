@@ -18,7 +18,7 @@ from .llm import LLMComplete
 from .prompts import render_direct_link, render_generation_prompt
 from .schema_profile import SchemaProfile
 from .schemas import LinkedSchema, RetrievedValues
-from .util import extract_llm_sql, extract_xml_result
+from .util import extract_llm_sql, extract_xml_result, parse_qualified_column
 
 logger = logging.getLogger(__name__)
 
@@ -195,10 +195,7 @@ class RobustSchemaLinker:
         tables: Set[str] = set()
         columns: Dict[str, Set[str]] = {}
         for key, values in retrieved.values.items():
-            if "." in key:
-                table, column = key.split(".", 1)
-            else:
-                table, column = "", key
+            table, column = parse_qualified_column(key)
             # Link the column if any retrieved value is below the distance
             # threshold (distance = 1 - cosine similarity).
             if any(v.distance < self._value_distance_threshold for v in values):

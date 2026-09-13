@@ -1,0 +1,44 @@
+# DeepEye-SQL configuration for the Pusula (MedipolDB) database.
+# Load with DEEPEYE_SQL_CONFIG=examples/agents/deepeye_sql_pusula.toml
+
+[deepeye_sql]
+# LLM sampling
+temperature = 0.7
+
+# Semantic value retrieval — Pusula text columns use Turkish values and long
+# codes, so keep a modest top-K and cap indexed values per column.
+top_k = 5
+max_value_length = 100
+max_indexed_values = 2000
+
+# Optional embedding backend (Qwen3-Embedding via OpenAI-compatible API):
+# embedding_model = "Qwen/Qwen3-Embedding-0.6B"
+# embedding_api_base = "https://your-embedding-endpoint/v1"
+# embedding_api_key = "${env:EMBEDDING_API_KEY}"
+# index_dir = "~/.dbgpt/deepeye_index"
+
+# Robust schema linking
+value_distance_threshold = 0.05
+direct_linking_sampling_budget = 1
+reversed_linking_sampling_budget = 1
+
+# N-version generation
+generation_sampling_budget = 1
+num_examples = 5
+
+# Tool-chain
+checker_sampling_budget = 1
+
+# Confidence-aware selection
+confidence_threshold = 0.6
+filter_top_k = 2
+evaluator_sampling_budget = 3
+
+# Execution — Pusula tables can be large, so bound rows and keep read-only.
+max_rows = 100
+execution_timeout = 30
+read_only = true
+
+# Schema — strip the (many-column) Pusula schema if it exceeds this budget.
+include_value_stats = true
+max_schema_tokens = 30000

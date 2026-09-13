@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import sqlparse
 
@@ -243,6 +243,56 @@ def render_schema_ddl(connector, tables: Set[str]) -> str:
 def qualify_column(table: str, column: str) -> str:
     """Return a qualified column key ``table.column``."""
     return f"{table}.{column}"
+
+
+# Dialects that use double-quote identifier quoting; everything else uses
+# backticks (MySQL/MSSQL-style).
+_DOUBLE_QUOTE_DIALECTS = {
+    "postgresql",
+    "postgres",
+    "sqlite",
+    "duckdb",
+    "clickhouse",
+    "snowflake",
+    "oracle",
+}
+
+
+def quote_ident(name: str, dialect: Optional[str] = "") -> str:
+    """Quote a (possibly schema-qualified) identifier for SQL execution.
+
+    Each dot-separated part is quoted with the dialect-appropriate quote
+    character (double quotes for Postgres/SQLite/etc., backticks otherwise),
+    preserving case.
+    """
+    d = (dialect or "").lower()
+    q = '"' if d in _DOUBLE_QUOTE_DIALECTS else "`"
+    return ".".join(f"{q}{part.replace(q, q + q)}{q}" for part in name.split("."))
+
+
+def render_ident(name: str) -> str:
+    """Render an identifier for prompt text (backticks around each part)."""
+    return ".".join(f"`{part}`" for part in name.split("."))
+
+
+def split_qualified(name: str) -> Tuple[str, str]:
+    """Split a schema-qualified ``schema.table`` into ``(schema, table)``.
+
+    Returns ``("", name)`` when the name is not qualified.
+    """
+    if "." in name:
+        schema, table = name.rsplit(".", 1)
+        return schema, table
+    return "", name
+
+
+def parse_qualified_column(key: str) -> Tuple[str, str]:
+    """Split a ``schema.table.column`` key into ``(table, column)``.
+
+    Uses ``rsplit`` so a schema-qualified table is kept intact.
+    """
+    table, column = key.rsplit(".", 1)
+    return table, column
 
 
 _XML_RESULT_RE = re.compile(

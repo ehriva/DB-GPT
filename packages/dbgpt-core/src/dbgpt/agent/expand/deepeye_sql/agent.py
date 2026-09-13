@@ -21,6 +21,7 @@ from ..core.base_agent import ConversableAgent
 from ..core.profile import DynConfig, ProfileConfig
 from ..resource.database import DBResource
 from .config import DeepEyeSQLConfig
+from .multischema import wrap_multi_schema
 from .pipeline import DeepEyeSQLPipeline
 from .schemas import DeepEyeSQLResult
 
@@ -90,6 +91,11 @@ class DeepEyeSQLAgent(ConversableAgent):
     max_rows: int = 100
     include_value_stats: bool = True
     few_shot_examples: Optional[List] = None
+    # Multi-schema reflection: when True (or when `schemas` is set), the bound
+    # connector is wrapped to reflect tables across all non-system schemas
+    # using schema-qualified names.
+    multi_schema: bool = False
+    schemas: Optional[List[str]] = None
 
     def __init__(self, **kwargs):
         """Create a DeepEyeSQLAgent."""
@@ -111,13 +117,19 @@ class DeepEyeSQLAgent(ConversableAgent):
 
     @property
     def connector(self) -> Any:
-        """Return the underlying RDBMS connector."""
+        """Return the underlying (optionally schema-aware) RDBMS connector."""
         connector = getattr(self.database, "connector", None)
         if connector is None:
             raise ValueError(
                 "The bound DBResource does not expose a `.connector`; bind an "
                 "RDBMSConnectorResource (or SQLiteDBResource) instead."
             )
+        if self.multi_schema or self.schemas:
+            cached = getattr(self, "_schema_aware_connector", None)
+            if cached is None:
+                cached = wrap_multi_schema(connector, schemas=self.schemas)
+                object.__setattr__(self, "_schema_aware_connector", cached)
+            return cached
         return connector
 
     def check_available(self) -> None:

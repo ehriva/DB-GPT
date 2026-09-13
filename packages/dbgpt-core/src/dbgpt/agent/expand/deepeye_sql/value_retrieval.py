@@ -28,7 +28,7 @@ from .llm import LLMComplete
 from .prompts import render_keyword_extraction
 from .schema_profile import is_text_column
 from .schemas import RetrievedValue, RetrievedValues
-from .util import extract_json, extract_xml_result
+from .util import extract_json, extract_xml_result, quote_ident
 
 logger = logging.getLogger(__name__)
 
@@ -189,15 +189,17 @@ def _distinct_values(
     connector: Any, table: str, column: str, limit: int, max_value_length: int
 ) -> List[str]:
     dialect = (getattr(connector, "dialect", "") or "").lower()
+    t = quote_ident(table, dialect)
+    c = quote_ident(column, dialect)
     if dialect in ("mssql", "sqlserver"):
         sql = (
-            f"SELECT DISTINCT TOP ({limit}) {column} FROM {table} "
-            f"WHERE {column} IS NOT NULL AND {column} <> ''"
+            f"SELECT DISTINCT TOP ({limit}) {c} FROM {t} "
+            f"WHERE {c} IS NOT NULL AND {c} <> ''"
         )
     else:
         sql = (
-            f"SELECT DISTINCT {column} FROM {table} "
-            f"WHERE {column} IS NOT NULL AND {column} <> '' LIMIT {limit}"
+            f"SELECT DISTINCT {c} FROM {t} "
+            f"WHERE {c} IS NOT NULL AND {c} <> '' LIMIT {limit}"
         )
     try:
         result = connector.run(sql)

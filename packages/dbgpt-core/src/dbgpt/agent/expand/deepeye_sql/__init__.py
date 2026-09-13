@@ -29,7 +29,13 @@ from .agent import DeepEyeSQLAgent  # noqa: F401
 from .caching import clear_caches  # noqa: F401
 from .config import DeepEyeSQLConfig  # noqa: F401
 from .few_shot import load_few_shot_examples  # noqa: F401
+from .multischema import (  # noqa: F401
+    DEFAULT_EXCLUDED_SCHEMAS,
+    SchemaAwareConnector,
+    wrap_multi_schema,
+)
 from .pipeline import DeepEyeSQLPipeline  # noqa: F401
+from .pusula import PUSULA_SCHEMAS, build_pusula_connector, pusula_db_url  # noqa: F401
 from .schema_profile import SchemaProfile  # noqa: F401
 from .schemas import (  # noqa: F401
     CandidateSQL,
@@ -51,6 +57,12 @@ __all__ = [
     "DeepEyeSQLAgent",
     "DeepEyeSQLPipeline",
     "DeepEyeSQLConfig",
+    "SchemaAwareConnector",
+    "wrap_multi_schema",
+    "DEFAULT_EXCLUDED_SCHEMAS",
+    "PUSULA_SCHEMAS",
+    "build_pusula_connector",
+    "pusula_db_url",
     "SchemaProfile",
     "CandidateSQL",
     "CheckerReport",

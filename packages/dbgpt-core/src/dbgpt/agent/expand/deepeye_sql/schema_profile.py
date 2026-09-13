@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .schemas import RetrievedValues
+from .util import parse_qualified_column, quote_ident, split_qualified
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class SchemaProfile:
     """A mutable database schema profile used across pipeline stages."""
 
     db_id: str = ""
+    dialect: str = ""
     tables: Dict[str, TableInfo] = field(default_factory=dict)
     foreign_keys: List[Tuple[str, str, str, str]] = field(default_factory=list)
 
@@ -81,7 +83,10 @@ class SchemaProfile:
         db_id: Optional[str] = None,
     ) -> "SchemaProfile":
         """Build a schema profile from a DB-GPT connector."""
-        profile = cls(db_id=db_id or _db_id(connector))
+        profile = cls(
+            db_id=db_id or _db_id(connector),
+            dialect=(getattr(connector, "dialect", "") or ""),
+        )
         profile._load_foreign_keys(connector)
         table_names = list(connector.get_table_names())
         for table in table_names:
@@ -115,6 +120,15 @@ class SchemaProfile:
         return profile
 
     def _load_foreign_keys(self, connector: Any) -> None:
+        # Prefer a schema-aware connector's explicit FK listing (schema-qualified).
+        get_fks = getattr(connector, "get_foreign_keys", None)
+        if callable(get_fks):
+            try:
+                self.foreign_keys = list(get_fks())
+                return
+            except Exception as e:  # pragma: no cover
+                logger.debug("get_foreign_keys failed: %s", e)
+
         metadata = getattr(connector, "_metadata", None)
         if metadata is None:
             return
@@ -146,10 +160,7 @@ class SchemaProfile:
     ) -> None:
         """Prepend retrieved values to each column's value examples."""
         for key, values in retrieved.values.items():
-            if "." in key:
-                table, column = key.split(".", 1)
-            else:
-                table, column = "", key
+            table, column = parse_qualified_column(key)
             tinfo = self.tables.get(table)
             if tinfo is None or column not in tinfo.columns:
                 continue
@@ -257,11 +268,13 @@ class SchemaProfile:
                     )
                 )
             cols_str = ",\n".join(col_parts)
-            lines.append(f"- Table: `{table_name}` [\n{cols_str}\n]")
+            lines.append(f"- Table: {quote_ident(table_name, self.dialect)} [\n{cols_str}\n]")
         if self.foreign_keys:
             lines.append("Foreign Keys:")
             for s_t, s_c, t_t, t_c in self.foreign_keys:
-                lines.append(f"`{s_t}`.`{s_c}` = `{t_t}`.`{t_c}`")
+                left = quote_ident(f"{s_t}.{s_c}", self.dialect)
+                right = quote_ident(f"{t_t}.{t_c}", self.dialect)
+                lines.append(f"{left} = {right}")
         return "\n".join(lines)
 
     def render_with_budget(self, max_tokens: Optional[int] = None) -> str:
@@ -292,7 +305,7 @@ class SchemaProfile:
         include_examples: bool,
         include_descriptions: bool,
     ) -> str:
-        segs = [f"`{cinfo.name}`: {cinfo.type}"]
+        segs = [f"{quote_ident(cinfo.name, self.dialect)}: {cinfo.type}"]
         if cinfo.primary_key:
             segs.append("Primary Key")
         if include_descriptions and cinfo.description:
@@ -346,15 +359,17 @@ def _table_description(connector: Any, table: str) -> str:
 def _distinct_values(connector: Any, table: str, column: str, limit: int) -> List[str]:
     """Fetch distinct non-empty values (bounded)."""
     dialect = (getattr(connector, "dialect", "") or "").lower()
+    t = quote_ident(table, dialect)
+    c = quote_ident(column, dialect)
     if dialect in ("mssql", "sqlserver"):
         sql = (
-            f"SELECT DISTINCT TOP ({limit}) {column} FROM {table} "
-            f"WHERE {column} IS NOT NULL AND {column} <> ''"
+            f"SELECT DISTINCT TOP ({limit}) {c} FROM {t} "
+            f"WHERE {c} IS NOT NULL AND {c} <> ''"
         )
     else:
         sql = (
-            f"SELECT DISTINCT {column} FROM {table} "
-            f"WHERE {column} IS NOT NULL AND {column} <> '' LIMIT {limit}"
+            f"SELECT DISTINCT {c} FROM {t} "
+            f"WHERE {c} IS NOT NULL AND {c} <> '' LIMIT {limit}"
         )
     try:
         result = connector.run(sql)
@@ -373,17 +388,19 @@ def _value_examples(connector: Any, table: str, column: str) -> List[str]:
 
 def _value_statistics(connector: Any, table: str, column: str) -> Dict[str, int]:
     dialect = (getattr(connector, "dialect", "") or "").lower()
+    t = quote_ident(table, dialect)
+    c = quote_ident(column, dialect)
     if dialect in ("mssql", "sqlserver"):
         sql = (
-            f"SELECT COUNT(*), COUNT(DISTINCT {column}), "
-            f"COUNT(*) - COUNT({column}) FROM (SELECT TOP {_STATS_LIMIT} {column} "
-            f"FROM {table}) AS _t"
+            f"SELECT COUNT(*), COUNT(DISTINCT {c}), "
+            f"COUNT(*) - COUNT({c}) FROM (SELECT TOP {_STATS_LIMIT} {c} "
+            f"FROM {t}) AS _t"
         )
     else:
         sql = (
-            f"SELECT COUNT(*), COUNT(DISTINCT {column}), "
-            f"COUNT(*) - COUNT({column}) FROM "
-            f"(SELECT {column} FROM {table} LIMIT {_STATS_LIMIT}) AS _t"
+            f"SELECT COUNT(*), COUNT(DISTINCT {c}), "
+            f"COUNT(*) - COUNT({c}) FROM "
+            f"(SELECT {c} FROM {t} LIMIT {_STATS_LIMIT}) AS _t"
         )
     try:
         result = connector.run(sql)

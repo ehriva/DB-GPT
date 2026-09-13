@@ -105,6 +105,38 @@ Key knobs on `DeepEyeSQLPipeline` / `DeepEyeSQLAgent`:
   `root_tracer` spans.
 * **Cross-conversation caching** — schema profiles and value indices are cached
   process-wide (`clear_caches()`).
+* **Multi-schema reflection** — :class:`SchemaAwareConnector` reflects tables
+  across all non-system schemas using schema-qualified, dialect-quoted names,
+  and the pipeline is identifier-quoting aware (works with Turkish-named,
+  mixed-case tables).
+
+## Multi-schema databases (e.g. Pusula / MedipolDB)
+
+Databases that split tables across several named schemas (like the Pusula
+Turkish HIS: `Hasta`, `Tedavi`, `Ortak`, `LIS`, `RIS`, `Stok`, `IK`,
+`MedipolDB`) are not reflected by a stock `RDBMSConnector`, which only reads
+the default schema. Wrap the connector:
+
+```python
+from dbgpt.agent.expand.deepeye_sql import (
+    DeepEyeSQLPipeline, PUSULA_SCHEMAS, build_pusula_connector,
+)
+
+connector = build_pusula_connector()  # reads PUSULA_DB_URL / OMOP_SOURCE_DB_URL
+pipeline = DeepEyeSQLPipeline(connector, llm_complete, model_name=...)
+result = await pipeline.run("How many patients are there?")
+```
+
+Or, with the agent, bind an `RDBMSConnectorResource` and set `multi_schema`:
+
+```python
+agent = await DeepEyeSQLAgent(multi_schema=True, schemas=PUSULA_SCHEMAS).bind(...).build()
+```
+
+See `examples/agents/deepeye_sql_pusula_example.py`,
+`examples/agents/deepeye_sql_pusula.toml`, and
+`examples/agents/build_pusula_sqlite.py` (builds a SQLite replica from the
+de-identified schema catalog for a no-database demo).
 
 ## Notes / adaptations
 
