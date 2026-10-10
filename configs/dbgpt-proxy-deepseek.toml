@@ -23,18 +23,17 @@ persist_path = "pilot/data"
 # Model Configurations
 [models]
 [[models.llms]]
-name = "deepseek-v4-pro"
-# name = "deepseek-reasoner"
-# name = "deepseek-chat"
-provider = "proxy/deepseek"
-# Disable V4-Pro thinking mode so ReAct responses stay parseable.
-thinking_enabled = false
-api_key = "your_deepseek_api_key"
+name = "LongCat-2.5-Preview"
+provider = "proxy/openai"
+api_base = "https://api.longcat.chat/openai/v1"
+api_key = "${env:LONGCAT_API_KEY}"
 
 [[models.embeddings]]
-name = "BAAI/bge-large-zh-v1.5"
+name = "Qwen/Qwen3-Embedding-0.6B"
 provider = "hf"
-# If not provided, the model will be downloaded from the Hugging Face model hub
-# uncomment the following line to specify the model path in the local file system
-# path = "the-model-path-in-the-local-file-system"
-path = "models/bge-large-zh-v1.5"
+# Load the downloaded model locally; no Hub access is needed at inference time.
+path = "models/Qwen3-Embedding-0.6B"
+device = "cpu"
+normalize_embeddings = true
+model_kwargs = { local_files_only = true }
+encode_kwargs = { batch_size = 4 }

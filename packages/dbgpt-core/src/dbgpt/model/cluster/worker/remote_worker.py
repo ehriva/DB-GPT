@@ -50,7 +50,7 @@ class RemoteModelWorker(ModelWorker):
             delimiter = b"\0"
             buffer = b""
             url = self.worker_addr + "/generate_stream"
-            logger.debug(f"Send async_generate_stream to url {url}, params: {params}")
+            logger.debug("Send async_generate_stream to worker")
             async with client.stream(
                 "POST",
                 url,
@@ -78,7 +78,7 @@ class RemoteModelWorker(ModelWorker):
 
         async with httpx.AsyncClient() as client:
             url = self.worker_addr + "/generate"
-            logger.debug(f"Send async_generate to url {url}, params: {params}")
+            logger.debug("Send async_generate to worker")
             response = await client.post(
                 url,
                 headers=self._get_trace_headers(),
@@ -97,7 +97,7 @@ class RemoteModelWorker(ModelWorker):
 
         async with httpx.AsyncClient() as client:
             url = self.worker_addr + "/count_token"
-            logger.debug(f"Send async_count_token to url {url}, params: {prompt}")
+            logger.debug("Send async_count_token to worker")
             response = await client.post(
                 url,
                 headers=self._get_trace_headers(),
@@ -136,7 +136,7 @@ class RemoteModelWorker(ModelWorker):
         import requests
 
         url = self.worker_addr + "/embeddings"
-        logger.debug(f"Send embeddings to url {url}, params: {params}")
+        logger.debug("Send embeddings to worker")
         response = requests.post(
             url,
             headers=self._get_trace_headers(),

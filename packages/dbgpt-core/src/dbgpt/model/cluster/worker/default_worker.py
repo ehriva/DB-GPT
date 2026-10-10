@@ -1,7 +1,6 @@
 import logging
 import os
 import time
-import traceback
 from typing import Dict, Iterator, List, Optional, Type
 
 from dbgpt.configs.model_config import get_device
@@ -104,12 +103,12 @@ class DefaultModelWorker(ModelWorker):
     def start(self, command_args: List[str] = None) -> None:
         # Lazy load torch
         _try_import_torch()
-        logger.info(f"Begin load model, model params: {self._model_params}")
+        logger.info("Begin load model: %s", self.model_name)
         metadata = {
             "model_name": self.model_name,
             "model_path": self.model_path,
             "model_type": self.llm_adapter.model_type(),
-            "llm_adapter": str(self.llm_adapter),
+            "llm_adapter": type(self.llm_adapter).__name__,
             "run_service": SpanTypeRunName.MODEL_WORKER,
             "params": _get_dict_from_obj(self._model_params),
             "sys_infos": _get_dict_from_obj(get_system_info()),
@@ -196,16 +195,14 @@ class DefaultModelWorker(ModelWorker):
                 last_metrics = current_metrics
                 yield model_output
             logger.info(
-                f"\n\nfull stream output:\n{previous_response}\n\nmodel "
-                f"generate_stream params:\n{params}\n"
-                f"{last_metrics.to_printable_string()}"
+                "generate_stream metrics: %s", last_metrics.to_printable_string()
             )
-            model_span.end(metadata={"output": previous_response})
+            model_span.end()
             span.end()
         except Exception as e:
             output = self._handle_exception(e)
             yield output
-            span.end(metadata={"error": output.to_dict()})
+            span.end(metadata={"error_type": type(e).__name__})
 
     def generate(self, params: Dict) -> ModelOutput:
         """Generate non stream result"""
@@ -241,7 +238,7 @@ class DefaultModelWorker(ModelWorker):
             )
             last_metrics = current_metrics
             logger.info(
-                f"generate params:\n{params}\n{last_metrics.to_printable_string()}"
+                "generate metrics: %s", last_metrics.to_printable_string()
             )
             return model_output
         else:
@@ -324,16 +321,14 @@ class DefaultModelWorker(ModelWorker):
                 last_metrics = current_metrics
                 yield model_output
             logger.info(
-                f"\n\nfull stream output:\n{previous_response}\n\nmodel "
-                f"generate_stream params:\n{params}\n"
-                f"{last_metrics.to_printable_string()}"
+                "generate_stream metrics: %s", last_metrics.to_printable_string()
             )
-            model_span.end(metadata={"output": previous_response})
+            model_span.end()
             span.end()
         except Exception as e:
             output = self._handle_exception(e)
             yield output
-            span.end(metadata={"error": output.to_dict()})
+            span.end(metadata={"error_type": type(e).__name__})
 
     async def async_generate(self, params: Dict) -> ModelOutput:
         if self._support_generate_func:
@@ -367,7 +362,7 @@ class DefaultModelWorker(ModelWorker):
             )
             last_metrics = current_metrics
             logger.info(
-                f"generate params:\n{params}\n{last_metrics.to_printable_string()}"
+                "generate metrics: %s", last_metrics.to_printable_string()
             )
             return model_output
         else:
@@ -429,30 +424,16 @@ class DefaultModelWorker(ModelWorker):
                     "current generate stream function is synchronous generate stream "
                     "function"
                 )
-        str_prompt = params.get("prompt")
-        if not str_prompt:
-            str_prompt = params.get("string_prompt")
-        logger.info(
-            f"llm_adapter: {str(self.llm_adapter)}\n\nmodel prompt: \n\n"
-            f"{str_prompt}\n\n{func_type} output:\n"
-        )
+        logger.info("model generation: model=%s mode=%s", self.model_name, func_type)
 
         generate_func_str_name = "{}.{}".format(func.__module__, func.__name__)
 
-        span_params = {k: v for k, v in params.items()}
-        if "messages" in span_params:
-            span_params["messages"] = list(
-                map(lambda m: m.dict(), span_params["messages"])
-            )
-
         metadata = {
             "is_async_func": self.support_async(),
-            "llm_adapter": str(self.llm_adapter),
+            "llm_adapter": type(self.llm_adapter).__name__,
             "generate_func": generate_func_str_name,
         }
-        metadata.update(span_params)
-        metadata.update(model_context)
-        metadata["prompt"] = str_prompt
+        metadata["model_name"] = self.model_name
 
         model_span = root_tracer.start_span(span_operation_name, metadata=metadata)
 
@@ -496,8 +477,6 @@ class DefaultModelWorker(ModelWorker):
         if model_output.has_text:
             current_output += model_output.text
         incremental_output = current_output[len(previous_response) :]
-        print(incremental_output, end="", flush=True)
-
         metrics = _new_metrics_from_model_output(last_metrics, is_first_generate, usage)
         model_output.metrics = metrics
         model_output.model_context = model_context
@@ -510,10 +489,9 @@ class DefaultModelWorker(ModelWorker):
                 text="**GPU OutOfMemory, Please Refresh.**", error_code=1
             )
         else:
-            msg = traceback.format_exc()
-            logger.error(f"Model inference error, detail: {msg}")
+            logger.error("Model inference error: %s", type(e).__name__)
             model_output = ModelOutput(
-                text=f"**LLMServer Generate Error, Please CheckErrorInfo.**: {e}",
+                text=f"模型调用失败（{type(e).__name__}），请检查服务状态后重试。",
                 error_code=1,
             )
         return model_output

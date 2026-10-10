@@ -92,6 +92,7 @@ def parse_model_request(
         user_name=params.get("user_name"),
         request_id=params.get("request_id"),
         is_reasoning_model=params.get("is_reasoning_model", False),
+        extra=(params.get("context") or {}).get("extra") or {},
     )
     request = ModelRequest.build_request(
         default_model,

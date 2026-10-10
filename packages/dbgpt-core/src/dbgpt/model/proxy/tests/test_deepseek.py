@@ -48,6 +48,17 @@ class TestDeepSeekThinkingMode:
         )
 
     @patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"})
+    def test_json_preflight_disables_thinking_only_for_that_request(self):
+        from dbgpt.model.utils.llm_utils import parse_model_request
+        client = DeepseekLLMClient(model="deepseek-v4-flash", thinking_enabled=True,
+                                  openai_client=_FakeOpenAIClient())
+        request = ModelRequest.build_request(model="deepseek-v4-flash", messages=[],
+                    context={"extra": {"thinking_enabled": False}})
+        forwarded = parse_model_request(request.to_dict(), "deepseek-v4-flash", stream=False)
+        assert client._build_request(forwarded)["extra_body"]["thinking"] == {"type": "disabled"}
+        assert client._build_request(ModelRequest(model="deepseek-v4-flash", messages=[]))["extra_body"]["thinking"] == {"type": "enabled"}
+
+    @patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"})
     def test_v4_pro_disables_thinking_by_default(self):
         client = DeepseekLLMClient(
             model="deepseek-v4-pro",

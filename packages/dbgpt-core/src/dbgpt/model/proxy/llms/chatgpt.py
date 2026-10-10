@@ -295,7 +295,7 @@ class OpenAILLMClient(ProxyLLMClient):
         # Apply openai kwargs
         for k, v in self._openai_kwargs.items():
             payload[k] = v
-        if request.temperature:
+        if request.temperature is not None:
             payload["temperature"] = request.temperature
         if request.max_new_tokens:
             payload["max_tokens"] = request.max_new_tokens
@@ -307,6 +307,11 @@ class OpenAILLMClient(ProxyLLMClient):
             payload["tools"] = request.tools
         if request.tool_choice is not None:
             payload["tool_choice"] = request.tool_choice
+        request_thinking = (request.context.extra or {}).get("thinking_enabled") if request.context else None
+        if model == "LongCat-2.5-Preview" and isinstance(request_thinking, bool):
+            extra_body = dict(payload.get("extra_body") or {})
+            extra_body["thinking"] = {"type": "enabled" if request_thinking else "disabled"}
+            payload["extra_body"] = extra_body
         return payload
 
     async def generate(
@@ -317,14 +322,12 @@ class OpenAILLMClient(ProxyLLMClient):
         request = self.local_covert_message(request, message_converter)
         messages = request.to_common_messages()
         payload = self._build_request(request)
-        logger.info(
-            f"Send request to openai, payload: {payload}\n\n messages:\n{messages}"
-        )
+        logger.info("Send request to OpenAI-compatible model: %s", request.model)
         try:
             return await self.generate_v1(messages, payload)
         except Exception as e:
             return ModelOutput(
-                text=f"**LLMServer Generate Error, Please CheckErrorInfo.**: {e}",
+                text=f"模型调用失败（{type(e).__name__}），请检查服务状态后重试。",
                 error_code=1,
             )
 
@@ -337,7 +340,7 @@ class OpenAILLMClient(ProxyLLMClient):
         messages = request.to_common_messages()
         payload = self._build_request(request, stream=True)
         logger.info(
-            f"Send request to openai, payload: {payload}\n\n messages:\n{messages}"
+            "Send streaming request to OpenAI-compatible model: %s", request.model
         )
         async for r in self.generate_stream_v1(messages, payload):
             yield r
@@ -369,7 +372,8 @@ class OpenAILLMClient(ProxyLLMClient):
                 for tl in raw_tool_calls
             ]
         return ModelOutput.build(
-            text, reasoning_content, usage=usage, tool_calls=tool_calls
+            text, reasoning_content, usage=usage, tool_calls=tool_calls,
+            finish_reason=chat_completion.choices[0].finish_reason,
         )
 
     async def generate_stream_v1(
