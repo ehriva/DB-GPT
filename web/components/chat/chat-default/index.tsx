@@ -137,7 +137,12 @@ function Default() {
               <span>发现更多</span>
             </span>
           </div>
-          <TabContent type={activeKey === 'used' ? 'used' : 'recommend'} apps={apps?.app_list || []} loading={loading} refresh={refresh} />
+          <TabContent
+            type={activeKey === 'used' ? 'used' : 'recommend'}
+            apps={apps?.app_list || []}
+            loading={loading}
+            refresh={refresh}
+          />
           {helps && helps.length > 0 && (
             <div>
               <h2 className='font-medium text-xl my-4'>我可以帮您：</h2>

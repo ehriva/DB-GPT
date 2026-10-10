@@ -72,13 +72,7 @@ function ConfigurableForm({ params, form }: { params: Array<ConfigurableParams> 
 
   function renderItem(param: ConfigurableParams) {
     if (param.nested_fields) {
-      return (
-        <NestedFormFields
-          parentName={param.param_name}
-          fields={param.nested_fields}
-          form={form}
-        />
-      );
+      return <NestedFormFields parentName={param.param_name} fields={param.nested_fields} form={form} />;
     }
 
     const type = param.param_type.toLowerCase();

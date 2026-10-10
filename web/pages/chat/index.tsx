@@ -5,12 +5,12 @@ import useChat, { ChatContextStatus, PendingQuestionEvent } from '@/hooks/use-ch
 import ChatContentContainer from '@/new-components/chat/ChatContentContainer';
 import ChatDefault from '@/new-components/chat/content/ChatDefault';
 import QuestionDock from '@/new-components/chat/content/QuestionDock';
-import type { QuestionReplyDetails } from '@/utils/question-reply';
 import ChatInputPanel from '@/new-components/chat/input/ChatInputPanel';
 import ChatSider from '@/new-components/chat/sider/ChatSider';
 import { IApp } from '@/types/app';
 import { ChartData, ChatHistoryResponse, IChatDialogueSchema, UserChatContent } from '@/types/chat';
 import { getInitMessage, transformFileUrl } from '@/utils';
+import type { QuestionReplyDetails } from '@/utils/question-reply';
 import { useAsyncEffect, useRequest } from 'ahooks';
 import { Flex, Layout, Spin } from 'antd';
 import dynamic from 'next/dynamic';

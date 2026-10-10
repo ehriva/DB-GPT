@@ -1,4 +1,3 @@
-import type { ISpace } from '@/types/knowledge';
 import { ChatContext } from '@/app/chat-context';
 import ModelSelector from '@/components/chat/header/model-selector';
 import { useConnectors } from '@/hooks/use-connector-api';
@@ -42,7 +41,6 @@ import ManusRightPanel, {
 } from '@/new-components/chat/content/ManusRightPanel';
 import { MessagePart, ToolPart, ToolStatus } from '@/new-components/chat/content/OpenCodeSessionTurn';
 import QuestionDock from '@/new-components/chat/content/QuestionDock';
-import { QuestionReplyDetails, submitQuestionReply, submitQuestionReject } from '@/utils/question-reply';
 import SubAgentSection from '@/new-components/chat/content/SubAgentSection';
 import TaskPlanCard, { TaskItem } from '@/new-components/chat/content/TaskPlanCard';
 import ConfirmDialog from '@/new-components/connector/ConfirmDialog';
@@ -50,13 +48,15 @@ import { AttachedConnector, ConnectorInstance } from '@/new-components/connector
 import { useConfirmPolling } from '@/new-components/connector/useConfirmPolling';
 import FromTaskBanner from '@/new-components/scheduled-task/FromTaskBanner';
 import SaveAsScheduledTaskDrawer from '@/new-components/scheduled-task/SaveAsScheduledTaskDrawer';
+import type { ISpace } from '@/types/knowledge';
 import type { ChatReplayPayload } from '@/types/scheduled-task';
 import type { SubAgentState } from '@/types/subagent';
 import { buildActionDisplayText } from '@/utils/action-display';
 import { getRerunPayload } from '@/utils/chat-rerun';
-import { historyDatabase, matchHistoryDatabase, type HistoryDatabase } from '@/utils/history-datasource';
 import axios from '@/utils/ctx-axios';
 import { createSummaryPresentation, type SummaryPresentation } from '@/utils/final-presentation';
+import { historyDatabase, matchHistoryDatabase, type HistoryDatabase } from '@/utils/history-datasource';
+import { QuestionReplyDetails, submitQuestionReject, submitQuestionReply } from '@/utils/question-reply';
 import { decodeFinalEvent, decodeHistoryAnswer, type AgentCitation, type TaskResult } from '@/utils/react-agent-final';
 import { sendGetRequest, sendSpacePostRequest } from '@/utils/request';
 import {
@@ -569,7 +569,10 @@ const Playground: NextPage = () => {
   const [selectedDb, setSelectedDb] = useState<DataSource | null>(null);
   const databaseSelectionRevisionRef = useRef(0);
   const pendingHistoryDatabaseRef = useRef<{
-    database: HistoryDatabase | null | undefined; revision: number; request: number; epoch: number;
+    database: HistoryDatabase | null | undefined;
+    revision: number;
+    request: number;
+    epoch: number;
   } | null>(null);
   const chooseDatabase = (database: DataSource | null) => {
     databaseSelectionRevisionRef.current += 1;
@@ -1077,7 +1080,11 @@ const Playground: NextPage = () => {
   }, []);
 
   // Fetch Data Sources
-  const { data: dataSources, loading: _loadingSources, error: sourceLoadError } = useRequest(async () => {
+  const {
+    data: dataSources,
+    loading: _loadingSources,
+    error: sourceLoadError,
+  } = useRequest(async () => {
     try {
       const response: any = await axios.get('/api/v2/serve/datasources');
       // ctx-axios interceptor returns response.data directly, so response is {success, data, ...}
@@ -1090,7 +1097,7 @@ const Playground: NextPage = () => {
         })) as DataSource[];
       }
       throw new Error('数据源列表读取失败');
-    } catch (e) {
+    } catch {
       throw new Error('数据源列表读取失败');
     }
   });
@@ -1098,8 +1105,11 @@ const Playground: NextPage = () => {
   useEffect(() => {
     const pending = pendingHistoryDatabaseRef.current;
     if (!pending || _loadingSources) return;
-    if (pending.revision !== databaseSelectionRevisionRef.current
-      || pending.request !== historyRequestRef.current || pending.epoch !== taskEpochRef.current) {
+    if (
+      pending.revision !== databaseSelectionRevisionRef.current ||
+      pending.request !== historyRequestRef.current ||
+      pending.epoch !== taskEpochRef.current
+    ) {
       pendingHistoryDatabaseRef.current = null;
       return;
     }
@@ -1108,11 +1118,13 @@ const Playground: NextPage = () => {
     pendingHistoryDatabaseRef.current = null;
     setSelectedDb(restored.database);
     if (restored.status === 'matched') {
-      setMessages(previous => previous.map(msg => {
-        if (msg.role !== 'human' || msg.attachedDb) return msg;
-        const db = matchHistoryDatabase(historyDatabase({}, msg.context), dataSources).database;
-        return db ? { ...msg, attachedDb: { db_name: db.db_name, db_type: db.db_type } } : msg;
-      }));
+      setMessages(previous =>
+        previous.map(msg => {
+          if (msg.role !== 'human' || msg.attachedDb) return msg;
+          const db = matchHistoryDatabase(historyDatabase({}, msg.context), dataSources).database;
+          return db ? { ...msg, attachedDb: { db_name: db.db_name, db_type: db.db_type } } : msg;
+        }),
+      );
     }
     if (sourceLoadError) message.warning('数据源列表读取失败，请重试后重新选择数据源');
     else if (restored.status === 'missing' || restored.status === 'absent') message.warning('请重新选择数据源');
@@ -1172,7 +1184,9 @@ const Playground: NextPage = () => {
   // Fetch Skills/DBGPTs list
   const { data: skillsList, loading: _loadingSkills } = useRequest(async () => {
     try {
-      const response = await axios.get<unknown, { success: boolean; data: (Skill & { skill_type?: string })[] }>(`${process.env.API_BASE_URL ?? ''}/api/v1/skills/list`);
+      const response = await axios.get<unknown, { success: boolean; data: (Skill & { skill_type?: string })[] }>(
+        `${process.env.API_BASE_URL ?? ''}/api/v1/skills/list`,
+      );
       // ctx-axios interceptor returns response.data directly
       if (response?.success && Array.isArray(response.data)) {
         return response.data.map((item: any) => ({
@@ -1926,16 +1940,22 @@ const Playground: NextPage = () => {
     const effectiveSkill = overrideSkill !== undefined ? overrideSkill : selectedSkill;
     const effectiveDb = overrideDb !== undefined ? overrideDb : selectedDb;
     if (rerunMessage) {
-      const database = rerunMessage.historyDatabase !== undefined ? rerunMessage.historyDatabase
-        : rerunMessage.attachedDb ? { name: rerunMessage.attachedDb.db_name, type: rerunMessage.attachedDb.db_type }
-        : historyDatabase({}, rerunMessage.context);
+      const database =
+        rerunMessage.historyDatabase !== undefined
+          ? rerunMessage.historyDatabase
+          : rerunMessage.attachedDb
+            ? { name: rerunMessage.attachedDb.db_name, type: rerunMessage.attachedDb.db_type }
+            : historyDatabase({}, rerunMessage.context);
       const restored = matchHistoryDatabase(database, dataSources);
       if (database && restored.status !== 'matched') {
         message.warning('请重新选择数据源');
         return;
       }
-      if (restored.database) rerunMessage = { ...rerunMessage,
-        attachedDb: { db_name: restored.database.db_name, db_type: restored.database.db_type } };
+      if (restored.database)
+        rerunMessage = {
+          ...rerunMessage,
+          attachedDb: { db_name: restored.database.db_name, db_type: restored.database.db_type },
+        };
     }
     if (
       (!rerunMessage && !inputQuery.trim() && !hasSessionFileDrafts && !hasLegacyFile && !explicitLegacyFile) ||
@@ -2495,7 +2515,10 @@ const Playground: NextPage = () => {
             if (!current) return prev;
             const nextSteps = current.steps.map(item =>
               item.status === 'running'
-                ? { ...item, status: finalAnswer.taskResult?.status === 'succeeded' ? 'done' as const : 'failed' as const }
+                ? {
+                    ...item,
+                    status: finalAnswer.taskResult?.status === 'succeeded' ? ('done' as const) : ('failed' as const),
+                  }
                 : item,
             );
             return { ...prev, [responseId]: { ...current, steps: nextSteps } };
@@ -2560,8 +2583,13 @@ const Playground: NextPage = () => {
       }
       if (buffer.trim()) processEvent(buffer);
       if (!receivedFinal && !controller.signal.aborted) {
-        processEvent(`data: ${JSON.stringify({ type: 'final', content: '连接已结束，任务未完成。',
-          task_result: { status: 'incomplete', reason: 'stream_closed', missing: [] } })}`);
+        processEvent(
+          `data: ${JSON.stringify({
+            type: 'final',
+            content: '连接已结束，任务未完成。',
+            task_result: { status: 'incomplete', reason: 'stream_closed', missing: [] },
+          })}`,
+        );
       }
     } catch (err: any) {
       if (err?.name === 'AbortError' || controller.signal.aborted) {
@@ -2763,7 +2791,11 @@ const Playground: NextPage = () => {
     historyMessages.forEach(msg => {
       if (msg.role === 'human') {
         newMessages.push({
-          id: generateUUID(), role: 'human', context: msg.context, order: msg.order, model_name: msg.model_name,
+          id: generateUUID(),
+          role: 'human',
+          context: msg.context,
+          order: msg.order,
+          model_name: msg.model_name,
         });
       } else if (msg.role === 'view') {
         const viewId = generateUUID();
@@ -2779,8 +2811,10 @@ const Playground: NextPage = () => {
         if (sourceHuman && latestDatabase !== undefined) sourceHuman.historyDatabase = latestDatabase;
         const sourceMatch = matchHistoryDatabase(latestDatabase, dataSources);
         if (sourceHuman && latestDatabase && (latestDatabase.type || sourceMatch.database?.db_type)) {
-          sourceHuman.attachedDb = { db_name: latestDatabase.name,
-            db_type: latestDatabase.type || sourceMatch.database!.db_type };
+          sourceHuman.attachedDb = {
+            db_name: latestDatabase.name,
+            db_type: latestDatabase.type || sourceMatch.database!.db_type,
+          };
         }
 
         if (payload && (payload.version === 1 || payload.version === 2) && payload.type === 'react-agent') {
@@ -2931,8 +2965,12 @@ const Playground: NextPage = () => {
       const restored = matchHistoryDatabase(latestDatabase, dataSources);
       setSelectedDb(restored.database);
       if (restored.status === 'loading' && !sourceLoadError) {
-        pendingHistoryDatabaseRef.current = { database: latestDatabase, revision: databaseRevision,
-          request: historyRequestRef.current, epoch: taskEpochRef.current };
+        pendingHistoryDatabaseRef.current = {
+          database: latestDatabase,
+          revision: databaseRevision,
+          request: historyRequestRef.current,
+          epoch: taskEpochRef.current,
+        };
       } else if (sourceLoadError) {
         message.warning('数据源列表读取失败，请重试后重新选择数据源');
       } else if (restored.status === 'missing' || restored.status === 'absent') {

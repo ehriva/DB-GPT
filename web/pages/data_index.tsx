@@ -14,7 +14,6 @@ import { AutoSizer, Grid, InfiniteLoader } from 'react-virtualized';
 import { ChatContext } from '@/app/chat-context';
 import IconFont from '@/new-components/common/Icon';
 import BlurredCard from '@/new-components/common/blurredCard';
-import { AppListResponse } from '@/types/app';
 import moment from 'moment';
 
 const Playground: NextPage = () => {
@@ -60,7 +59,11 @@ const Playground: NextPage = () => {
       }),
     );
   // 获取应用列表
-  const { run: getAppListFn, runAsync: loadAppListAsync, loading } = useRequest(
+  const {
+    run: getAppListFn,
+    runAsync: loadAppListAsync,
+    loading,
+  } = useRequest(
     async (app_name = '', page_no = '1', page_size = '12') => {
       switch (activeKey) {
         case 'recommend':

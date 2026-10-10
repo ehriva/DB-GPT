@@ -84,8 +84,6 @@ function DatabaseForm({
         description: description || '',
       };
 
-
-
       const [testErr] = await apiInterceptors(postDbTestConnect(data));
       if (testErr) return;
       const [err] = await apiInterceptors((editValue ? postDbEdit : postDbAdd)(data));

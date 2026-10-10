@@ -174,11 +174,14 @@ const ChatFeedback = ({ conv_index, question, knowledge_space, select_param }: P
                   sx={{ width: '100%' }}
                 >
                   {select_param &&
-                    Object.keys(select_param)?.map(key => { const paramItem = key as keyof FeedBack; return (
-                      <Option key={paramItem} value={paramItem}>
-                        {select_param[paramItem]}
-                      </Option>
-                    ); })}
+                    Object.keys(select_param)?.map(key => {
+                      const paramItem = key as keyof FeedBack;
+                      return (
+                        <Option key={paramItem} value={paramItem}>
+                          {select_param[paramItem]}
+                        </Option>
+                      );
+                    })}
                 </Select>
               </Grid>
               <Grid xs={3}>

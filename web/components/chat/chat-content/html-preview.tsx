@@ -95,10 +95,12 @@ const HtmlPreview = ({ code, language = 'html' }: { code: string; language?: str
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(
-        Boolean(document.fullscreenElement ||
-          document.webkitFullscreenElement ||
-          document.mozFullScreenElement ||
-          document.msFullscreenElement),
+        Boolean(
+          document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement ||
+            document.msFullscreenElement,
+        ),
       );
     };
 

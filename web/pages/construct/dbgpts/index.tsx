@@ -243,7 +243,11 @@ function Agent() {
                   <div className='flex gap-2'>
                     {'author' in agent && agent.author && <span>{agent.author}</span>}
                     {'author' in agent && agent.author && <span>•</span>}
-                    <span>{moment('gmt_created' in agent ? agent.gmt_created : agent.created_at).fromNow() + ' ' + t('update')}</span>
+                    <span>
+                      {moment('gmt_created' in agent ? agent.gmt_created : agent.created_at).fromNow() +
+                        ' ' +
+                        t('update')}
+                    </span>
                   </div>
                 }
                 RightTop={agent.type && <Tag>{agent.type}</Tag>}

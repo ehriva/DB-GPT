@@ -260,13 +260,7 @@ const basicComponents: MarkdownComponent = {
     return <ol className='py-1 [&>li]:list-decimal'>{children}</ol>;
   },
   li({ children }) {
-    return (
-      <li
-        className={`text-sm leading-7 ml-5 pl-2 text-gray-600 dark:text-gray-300 `}
-      >
-        {children}
-      </li>
-    );
+    return <li className={`text-sm leading-7 ml-5 pl-2 text-gray-600 dark:text-gray-300 `}>{children}</li>;
   },
   table({ children }) {
     return (

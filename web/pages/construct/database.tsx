@@ -169,7 +169,6 @@ function Database() {
               className='border-none text-white bg-button-gradient'
               icon={<PlusOutlined />}
               onClick={() => {
-
                 setModal({ open: true });
               }}
             >
@@ -270,7 +269,10 @@ function Database() {
                       .filter(key => Object.prototype.hasOwnProperty.call(item.params, key))
                       .map(key => (
                         <p key={key}>
-                          {key}: {key === 'path' ? getFileName(String(item.params[key] ?? '')) : String(item.params[key] ?? '')}
+                          {key}:{' '}
+                          {key === 'path'
+                            ? getFileName(String(item.params[key] ?? ''))
+                            : String(item.params[key] ?? '')}
                         </p>
                       ))}
                   </>

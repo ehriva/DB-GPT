@@ -177,8 +177,11 @@ function SideBar() {
         path: '/construct/database',
       },
       {
-        key: 'terms', name: '共享术语库', isActive: pathname.startsWith('/terms'),
-        iconSrc: '/pictures/knowledge_sidebar.svg', path: '/terms',
+        key: 'terms',
+        name: '共享术语库',
+        isActive: pathname.startsWith('/terms'),
+        iconSrc: '/pictures/knowledge_sidebar.svg',
+        path: '/terms',
       },
       {
         key: 'connectors',
