@@ -59,7 +59,7 @@ export default function MonacoEditor({
       editor.getModel()?.id || '',
       getModelService(
         {
-          modelId: editor.getModel()?.id || '',
+          _modelId: editor.getModel()?.id || '',
           delimiter: ';',
         },
         () => sessionRef.current || null,

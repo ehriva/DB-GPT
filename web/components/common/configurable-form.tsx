@@ -44,7 +44,7 @@ function ConfigurableForm({ params, form }: { params: Array<ConfigurableParams> 
         if (nestedValue.type) {
           // Keep all field values instead of just type
           const nestedFields = param.nested_fields[nestedValue.type] || [];
-          const fieldValues = {};
+          const fieldValues: Record<string, unknown> = {};
           nestedFields.forEach(field => {
             if (nestedValue[field.param_name] !== undefined) {
               fieldValues[field.param_name] = nestedValue[field.param_name];
@@ -75,7 +75,7 @@ function ConfigurableForm({ params, form }: { params: Array<ConfigurableParams> 
       return (
         <NestedFormFields
           parentName={param.param_name}
-          fields={param.nested_fields as Record<string, ConfigurableParams[]>}
+          fields={param.nested_fields}
           form={form}
         />
       );

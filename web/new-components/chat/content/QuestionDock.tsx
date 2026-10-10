@@ -7,9 +7,10 @@
  */
 
 import { CheckCircleFilled, CheckSquareFilled, CloseOutlined, QuestionCircleFilled } from '@ant-design/icons';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { QuestionReplyDetails } from '@/utils/question-reply';
 import type { QuestionInfo } from '@/utils/react-sse-parser';
 
 export interface QuestionRequest {
@@ -20,25 +21,49 @@ export interface QuestionRequest {
 
 interface QuestionDockProps {
   request: QuestionRequest;
-  onReply: (requestId: string, answers: string[][]) => void;
-  onReject: (requestId: string) => void;
+  onReply: (requestId: string, answers: string[][], details?: QuestionReplyDetails) => void | Promise<void>;
+  onReject: (requestId: string, convId?: string) => void | Promise<void>;
 }
 
 const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject }) => {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<string[][]>(() => request.questions.map(() => []));
   const [customInputs, setCustomInputs] = useState<string[]>(() => request.questions.map(() => ''));
+  const [saveTerm, setSaveTerm] = useState(true);
+  const [formula, setFormula] = useState('');
+  const [formulaConfirmed, setFormulaConfirmed] = useState(false);
+  const [aliases, setAliases] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const isTerm = request.questions.some(q => q.kind === 'term');
+
+  useEffect(() => {
+    setSelected(request.questions.map(() => []));
+    setCustomInputs(request.questions.map(() => ''));
+    setSaveTerm(true);
+    setFormula('');
+    setFormulaConfirmed(false);
+    setAliases('');
+    setError('');
+    setSubmitting(false);
+  }, [request.request_id]);
 
   const canSubmit = useMemo(() => {
     return request.questions.every((q, i) => {
       if (!q.multiple) {
-        return selected[i].length === 1 || (q.custom !== false && customInputs[i].trim() !== '');
+        return selected[i]?.length === 1 || (q.custom !== false && !!customInputs[i]?.trim());
       }
-      return selected[i].length > 0 || (q.custom !== false && customInputs[i].trim() !== '');
+      return (selected[i]?.length ?? 0) > 0 || (q.custom !== false && !!customInputs[i]?.trim());
     });
   }, [selected, customInputs, request.questions]);
 
   const toggleOption = (qIndex: number, label: string, multiple: boolean) => {
+    if (request.questions[qIndex].kind === 'term' && !multiple) {
+      const option = request.questions[qIndex].options?.find(o => o.label === label);
+      setFormula(option?.formula || '');
+      setFormulaConfirmed(!!option?.formula_confirmed);
+      setAliases(option?.aliases?.join('，') || '');
+    }
     setSelected(prev => {
       const next = [...prev];
       const current = [...next[qIndex]];
@@ -61,6 +86,11 @@ const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject 
   };
 
   const setCustom = (qIndex: number, value: string) => {
+    if (request.questions[qIndex].kind === 'term' && selected[qIndex]?.length) {
+      setFormula('');
+      setFormulaConfirmed(false);
+      setAliases('');
+    }
     setSelected(prev => {
       const next = [...prev];
       next[qIndex] = [];
@@ -73,17 +103,47 @@ const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject 
     });
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (submitting || !canSubmit) return;
     const answers = request.questions.map((q, i) => {
       if (selected[i].length > 0) return selected[i];
       if (q.custom !== false && customInputs[i].trim()) return [customInputs[i].trim()];
       return [];
     });
-    onReply(request.request_id, answers);
+    setSubmitting(true);
+    setError('');
+    try {
+      await onReply(request.request_id, answers, {
+        conv_id: request.conv_id,
+        decisions: isTerm
+          ? {
+              save_term: saveTerm,
+              formula,
+              formula_confirmed: formulaConfirmed,
+              aliases: aliases
+                .split(/[,，]/)
+                .map(a => a.trim())
+                .filter(Boolean),
+            }
+          : undefined,
+      });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '提交失败，请重试。');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleDismiss = () => {
-    onReject(request.request_id);
+  const handleDismiss = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await onReject(request.request_id, request.conv_id);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '取消失败，请重试。');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -109,7 +169,7 @@ const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject 
 
       {/* Questions */}
       <div className='max-h-[320px] space-y-4 overflow-y-auto overscroll-contain px-4 py-3'>
-        {request.questions.map((q, qi) => (
+        {request.questions.map(({ options = [], ...q }, qi) => (
           <div key={qi}>
             {/* Header label */}
             {q.header && (
@@ -122,9 +182,9 @@ const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject 
             {/* Options */}
             <div
               className='grid gap-2'
-              style={{ gridTemplateColumns: `repeat(${q.options.length <= 3 ? q.options.length : 2}, 1fr)` }}
+              style={{ gridTemplateColumns: `repeat(${options.length <= 3 ? Math.max(1, options.length) : 2}, 1fr)` }}
             >
-              {q.options.map(opt => {
+              {options.map(opt => {
                 const isSelected = selected[qi].includes(opt.label);
                 const isMultiple = !!q.multiple;
                 return (
@@ -162,6 +222,30 @@ const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject 
                 );
               })}
             </div>
+            {options.some(opt => opt.sources?.length) && (
+              <div className='mt-2 space-y-1 text-xs text-slate-500'>
+                {options.map(opt =>
+                  opt.sources?.length ? (
+                    <div key={opt.label}>
+                      <span>{opt.label} · 来源：</span>
+                      {opt.sources.map(source =>
+                        /^https?:\/\//i.test(source.url) ? (
+                          <a
+                            key={source.url}
+                            href={source.url}
+                            target='_blank'
+                            rel='noopener noreferrer'
+                            className='mr-2 text-blue-600 underline'
+                          >
+                            {source.title || source.url}
+                          </a>
+                        ) : null,
+                      )}
+                    </div>
+                  ) : null,
+                )}
+              </div>
+            )}
             {/* Custom input */}
             {q.custom !== false && (
               <div className='mt-2'>
@@ -176,6 +260,48 @@ const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject 
             )}
           </div>
         ))}
+        {isTerm && (
+          <div className='space-y-2 border-t border-slate-200 pt-2 text-sm'>
+            <label className='flex items-center gap-2'>
+              <input type='checkbox' checked={saveTerm} onChange={e => setSaveTerm(e.target.checked)} />
+              保存到共享术语库，所有人下次可选
+            </label>
+            <label className='block'>
+              补充或修改计算口径（可选）
+              <input
+                className='mt-1 w-full rounded border p-2 dark:bg-slate-800'
+                value={formula}
+                onChange={e => setFormula(e.target.value)}
+                placeholder='例如：销售收入减材料成本'
+                maxLength={4000}
+              />
+            </label>
+            {formula.trim() && (
+              <label className='flex items-center gap-2'>
+                <input
+                  type='checkbox'
+                  checked={formulaConfirmed}
+                  onChange={e => setFormulaConfirmed(e.target.checked)}
+                />
+                已确认以上计算口径
+              </label>
+            )}
+            <label className='block'>
+              别名（可选，逗号分隔）
+              <input
+                className='mt-1 w-full rounded border p-2 dark:bg-slate-800'
+                value={aliases}
+                onChange={e => setAliases(e.target.value)}
+                placeholder='例如：CM，边际贡献'
+              />
+            </label>
+          </div>
+        )}
+        {error && (
+          <div role='alert' className='text-sm text-red-600'>
+            {error}
+          </div>
+        )}
       </div>
 
       {/* Footer with actions */}
@@ -188,7 +314,7 @@ const QuestionDock: React.FC<QuestionDockProps> = ({ request, onReply, onReject 
         </button>
         <button
           onClick={handleSubmit}
-          disabled={!canSubmit}
+          disabled={!canSubmit || submitting}
           className={`rounded-lg px-4 py-1.5 text-[13px] font-medium transition-all ${
             canSubmit
               ? 'bg-sky-500 text-white shadow-sm hover:bg-sky-600 active:bg-sky-700 dark:bg-sky-600 dark:hover:bg-sky-500'

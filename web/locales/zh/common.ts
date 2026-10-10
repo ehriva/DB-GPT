@@ -7,6 +7,13 @@ interface Resources {
 }
 
 export const CommonZh: Resources['translation'] = {
+  svg_export_unavailable: '暂时无法导出 PNG，请重试。',
+  'Start a conversation': '开始对话',
+  Copy: '复制',
+  prompt: '提示词',
+  select_knowledge_base: '选择知识库',
+  no_knowledge_spaces: '暂无知识库',
+
   Knowledge_Space: '知识库',
   space: '知识库',
   Vector: '向量',
@@ -76,9 +83,7 @@ export const CommonZh: Resources['translation'] = {
   Automatic: '自动切片',
   Process: '切片处理',
   Automatic_desc: '自动设置分割和预处理规则。',
-  chunk_size: '块大小',
   The_size_of_the_data_chunks: '处理中使用的数据块的大小',
-  chunk_overlap: '块重叠',
   retrieve_mode: '检索策略',
   The_amount_of_overlap: '相邻数据块之间的重叠量',
   The_strategy_of_query_retrival: '召回的检索策略',
@@ -97,7 +102,6 @@ export const CommonZh: Resources['translation'] = {
   update_success: '更新成功',
   update_failed: '更新失败',
   create_success: '创建成功',
-  create_failed: '创建失败',
   please_select_database_type: '请选择数据库类型',
   select_database_type: '选择数据库类型',
   description: '描述',

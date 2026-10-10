@@ -22,7 +22,7 @@ function MarketPlugins() {
   const [isError, setIsError] = useState(false);
   const [actionIndex, setActionIndex] = useState<number | undefined>();
 
-  const [form] = Form.useForm<PostAgentQueryParams['filter']>();
+  const [form] = Form.useForm<PostAgentQueryParams>();
 
   const pagination = useMemo<{ pageNo: number; pageSize: number }>(
     () => ({
@@ -40,7 +40,7 @@ function MarketPlugins() {
     const queryParams: PostAgentQueryParams = {
       page_index: pagination.pageNo,
       page_size: pagination.pageSize,
-      filter: form.getFieldsValue(),
+      ...form.getFieldsValue(),
     };
     const [err, res] = await apiInterceptors(postAgentQuery(queryParams));
     setIsError(!!err);

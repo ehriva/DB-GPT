@@ -123,7 +123,7 @@ const ManusStepCard: React.FC<StepCardProps> = ({
 }) => {
   const { t } = useTranslation();
 
-  const typeLabel = useMemo(() => getTypeLabel(type, t), [type, t]);
+  const typeLabel = useMemo(() => getTypeLabel(type, key => t(key, { defaultValue: key })), [type, t]);
 
   return (
     <div

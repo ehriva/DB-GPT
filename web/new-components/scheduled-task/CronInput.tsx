@@ -126,7 +126,7 @@ const CronInput: React.FC<CronInputProps> = ({ value, onChange }) => {
   }, [preset, custom, t]);
 
   // Locale-aware option lists (labels resolved via i18n; values are cron parts).
-  const weekdayOptions = useMemo(() => WEEKDAYS.map(w => ({ value: w.value, label: t(w.labelKey) })), [t]);
+  const weekdayOptions = useMemo(() => WEEKDAYS.map(w => ({ value: w.value, label: t(w.labelKey, { defaultValue: w.labelKey }) })), [t]);
   const monthDayOptions = useMemo(
     () =>
       Array.from({ length: 31 }, (_, i) => ({

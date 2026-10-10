@@ -9,6 +9,7 @@ import { MessagePart, ReasoningPart, ToolPart } from '@/new-components/chat/cont
 import { AgentCitation, AgentFinalAnswer, decodeFinalEvent, decodeHistoryAnswer } from '@/utils/react-agent-final';
 import { ReActSSEState, SSEQuestionAskedEvent, createReActSSEState, parseSSELine } from '@/utils/react-sse-parser';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { QuestionReplyDetails, submitQuestionReply, submitQuestionReject } from '@/utils/question-reply';
 
 export interface ReActAgentRequest {
   user_input: string;
@@ -50,8 +51,8 @@ export interface UseReActAgentReturn {
   sendMessage: (request: ReActAgentRequest) => Promise<void>;
   cancel: () => void;
   reset: () => void;
-  replyQuestion: (requestId: string, answers: string[][]) => Promise<void>;
-  rejectQuestion: (requestId: string) => Promise<void>;
+  replyQuestion: (requestId: string, answers: string[][], details?: QuestionReplyDetails) => Promise<void>;
+  rejectQuestion: (requestId: string, convId?: string) => Promise<void>;
 }
 
 const initialState: ReActAgentState = {
@@ -95,6 +96,8 @@ export function useReActAgent(options: UseReActAgentOptions = {}): UseReActAgent
       ...prev,
       isWorking: false,
       endTime: Date.now(),
+      finalAnswer: prev.isWorking ? { ...prev.finalAnswer,
+        taskResult: { status: 'cancelled', reason: 'user_cancelled', missing: [] } } : prev.finalAnswer,
     }));
   }, []);
 
@@ -167,7 +170,8 @@ export function useReActAgent(options: UseReActAgentOptions = {}): UseReActAgent
 
       // Initialize state
       sseStateRef.current = createReActSSEState();
-      abortControllerRef.current = new AbortController();
+      const requestController = new AbortController();
+      abortControllerRef.current = requestController;
 
       setState({
         isWorking: true,
@@ -189,7 +193,7 @@ export function useReActAgent(options: UseReActAgentOptions = {}): UseReActAgent
             Accept: 'text/event-stream',
           },
           body: JSON.stringify(request),
-          signal: abortControllerRef.current.signal,
+          signal: requestController.signal,
         });
 
         if (!response.ok) {
@@ -236,11 +240,14 @@ export function useReActAgent(options: UseReActAgentOptions = {}): UseReActAgent
           }
         }
 
-        // Mark as complete
+        if (requestController.signal.aborted) return;
+        sseStateRef.current?.finishInterruptedStream();
+        // Closing the connection alone cannot prove successful delivery.
         setState(prev => ({
           ...prev,
           isWorking: false,
           endTime: Date.now(),
+          finalAnswer: sseStateRef.current?.getFinalAnswer() ?? prev.finalAnswer,
         }));
       } catch (error: any) {
         if (error.name === 'AbortError') {
@@ -254,6 +261,8 @@ export function useReActAgent(options: UseReActAgentOptions = {}): UseReActAgent
           ...prev,
           isWorking: false,
           error: errorMessage,
+          finalAnswer: { ...prev.finalAnswer,
+            taskResult: { status: 'failed', reason: 'connection_error', missing: [] } },
           endTime: Date.now(),
         }));
 
@@ -265,25 +274,14 @@ export function useReActAgent(options: UseReActAgentOptions = {}): UseReActAgent
     [baseUrl, cancel, processSSELine, onError],
   );
 
-  const replyQuestion = useCallback(async (requestId: string, answers: string[][]) => {
-    const res = await fetch(`/api/v1/chat/question/${requestId}/reply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answers }),
-    });
-    if (res.ok) {
-      setPendingQuestion(null);
-    }
+  const replyQuestion = useCallback(async (requestId: string, answers: string[][], details?: QuestionReplyDetails) => {
+    await submitQuestionReply(requestId, answers, details);
+    setPendingQuestion(null);
   }, []);
 
-  const rejectQuestion = useCallback(async (requestId: string) => {
-    const res = await fetch(`/api/v1/chat/question/${requestId}/reject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (res.ok) {
-      setPendingQuestion(null);
-    }
+  const rejectQuestion = useCallback(async (requestId: string, convId?: string) => {
+    await submitQuestionReject(requestId, convId);
+    setPendingQuestion(null);
   }, []);
 
   return {

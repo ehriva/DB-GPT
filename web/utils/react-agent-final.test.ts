@@ -1,7 +1,45 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { decodeAgentFinalAnswer, decodeAgentHistoryAnswer } from './react-agent-final';
+import { decodeAgentFinalAnswer, decodeAgentHistoryAnswer, taskResultLabel } from './react-agent-final';
+
+test('intermediate artifacts and legacy history never prove completion', () => {
+  const answer = decodeAgentHistoryAnswer({ type: 'react-agent', version: 2,
+    final_content: 'Let me inspect _run.py', steps: [], artifacts: ['_run.py'] });
+  assert.equal(answer.taskResult, undefined);
+  assert.equal(taskResultLabel(answer.taskResult), 'task_unverified');
+});
+
+test('explicit outcome survives both final streaming and history reload', () => {
+  for (const status of ['succeeded', 'incomplete', 'failed', 'cancelled'] as const) {
+    const result = { status, reason: 'example', missing: ['HTML report'], warnings: [] };
+    const live = decodeAgentFinalAnswer({ content: 'answer', task_result: result });
+    const history = decodeAgentHistoryAnswer({ type: 'react-agent', version: 2,
+      final_content: 'answer', steps: [], task_result: result });
+    assert.deepEqual(live.taskResult, result);
+    assert.deepEqual(history.taskResult, result);
+    assert.equal(taskResultLabel(live.taskResult) === 'task_completed', status === 'succeeded');
+  }
+});
+
+test('data warnings survive streaming and history and use a truthful completed label', () => {
+  const result = { status: 'succeeded', reason: 'completed', missing: [], warnings: [{
+    metric: '毛利率', reason: 'missing_input', message: '缺工费，影响4行', affected_rows: 4,
+  }] };
+  const live = decodeAgentFinalAnswer({ content: 'answer', task_result: result });
+  const history = decodeAgentHistoryAnswer({ type: 'react-agent', version: 2,
+    final_content: 'answer', task_result: result });
+  assert.deepEqual(live.taskResult, result);
+  assert.deepEqual(history.taskResult, result);
+  assert.equal(taskResultLabel(live.taskResult), 'analysis_completed_with_warnings');
+  const legacy = decodeAgentFinalAnswer({ task_result: { status: 'succeeded', reason: 'completed' } });
+  assert.deepEqual(legacy.taskResult?.warnings, []);
+});
+
+test('malformed task result cannot produce a completed label', () => {
+  const answer = decodeAgentFinalAnswer({ content: 'done', task_result: { status: 'success' } });
+  assert.equal(taskResultLabel(answer.taskResult), 'task_unverified');
+});
 
 test('decodes protocol v2 final answer without mixing citations into content', () => {
   const answer = decodeAgentFinalAnswer({

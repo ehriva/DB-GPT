@@ -5,6 +5,7 @@ import { HEADER_USER_ID_KEY } from '@/utils/constants/index';
 import { EventStreamContentType, fetchEventSource } from '@microsoft/fetch-event-source';
 import { message } from 'antd';
 import { useCallback, useContext, useRef, useState } from 'react';
+import { QuestionReplyDetails, submitQuestionReply, submitQuestionReject } from '@/utils/question-reply';
 
 export interface PendingQuestionEvent {
   request_id: string;
@@ -212,31 +213,14 @@ const useChat = ({ queryAgentURL = '/api/v1/chat/completions', app_code }: Props
     [queryAgentURL, app_code, scene],
   );
 
-  const replyQuestion = useCallback(async (requestId: string, answers: string[][]) => {
-    const res = await fetch(`${process.env.API_BASE_URL ?? ''}/api/v1/chat/question/${requestId}/reply`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        [HEADER_USER_ID_KEY]: getUserId() ?? '',
-      },
-      body: JSON.stringify({ answers }),
-    });
-    if (res.ok) {
-      setPendingQuestion(null);
-    }
+  const replyQuestion = useCallback(async (requestId: string, answers: string[][], details?: QuestionReplyDetails) => {
+    await submitQuestionReply(requestId, answers, details);
+    setPendingQuestion(null);
   }, []);
 
-  const rejectQuestion = useCallback(async (requestId: string) => {
-    const res = await fetch(`${process.env.API_BASE_URL ?? ''}/api/v1/chat/question/${requestId}/reject`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        [HEADER_USER_ID_KEY]: getUserId() ?? '',
-      },
-    });
-    if (res.ok) {
-      setPendingQuestion(null);
-    }
+  const rejectQuestion = useCallback(async (requestId: string, convId?: string) => {
+    await submitQuestionReject(requestId, convId);
+    setPendingQuestion(null);
   }, []);
 
   return { chat, ctrl, contextStatus, pendingQuestion, replyQuestion, rejectQuestion };

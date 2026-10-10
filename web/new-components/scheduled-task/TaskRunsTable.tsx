@@ -143,7 +143,7 @@ const TaskRunsTable: React.FC<TaskRunsTableProps> = ({ taskId }) => {
                   className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium ${meta.bg} ${meta.text}`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
-                  {t(STATUS_LABEL_KEY[run.status])}
+                  {t(STATUS_LABEL_KEY[run.status], { defaultValue: run.status })}
                 </span>
               </div>
 

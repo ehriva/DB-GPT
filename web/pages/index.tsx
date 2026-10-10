@@ -1,3 +1,4 @@
+import type { ISpace } from '@/types/knowledge';
 import { ChatContext } from '@/app/chat-context';
 import ModelSelector from '@/components/chat/header/model-selector';
 import { useConnectors } from '@/hooks/use-connector-api';
@@ -41,6 +42,7 @@ import ManusRightPanel, {
 } from '@/new-components/chat/content/ManusRightPanel';
 import { MessagePart, ToolPart, ToolStatus } from '@/new-components/chat/content/OpenCodeSessionTurn';
 import QuestionDock from '@/new-components/chat/content/QuestionDock';
+import { QuestionReplyDetails, submitQuestionReply, submitQuestionReject } from '@/utils/question-reply';
 import SubAgentSection from '@/new-components/chat/content/SubAgentSection';
 import TaskPlanCard, { TaskItem } from '@/new-components/chat/content/TaskPlanCard';
 import ConfirmDialog from '@/new-components/connector/ConfirmDialog';
@@ -51,9 +53,11 @@ import SaveAsScheduledTaskDrawer from '@/new-components/scheduled-task/SaveAsSch
 import type { ChatReplayPayload } from '@/types/scheduled-task';
 import type { SubAgentState } from '@/types/subagent';
 import { buildActionDisplayText } from '@/utils/action-display';
+import { getRerunPayload } from '@/utils/chat-rerun';
+import { historyDatabase, matchHistoryDatabase, type HistoryDatabase } from '@/utils/history-datasource';
 import axios from '@/utils/ctx-axios';
 import { createSummaryPresentation, type SummaryPresentation } from '@/utils/final-presentation';
-import { decodeFinalEvent, decodeHistoryAnswer, type AgentCitation } from '@/utils/react-agent-final';
+import { decodeFinalEvent, decodeHistoryAnswer, type AgentCitation, type TaskResult } from '@/utils/react-agent-final';
 import { sendGetRequest, sendSpacePostRequest } from '@/utils/request';
 import {
   ApiOutlined,
@@ -180,7 +184,7 @@ interface DataSource {
 
 // Define Knowledge Base Interface (Partial)
 interface KnowledgeSpace {
-  id: number;
+  id: string | number;
   name: string;
   vector_type: string;
   desc?: string;
@@ -193,6 +197,7 @@ interface ChatMessage {
   role: 'human' | 'view';
   context: string;
   model_name?: string;
+  replayPayload?: ChatReplayPayload;
   order?: number;
   thinking?: boolean;
   /** Immutable server snapshots of every session file attached to this message. */
@@ -200,12 +205,15 @@ interface ChatMessage {
   attachedKnowledge?: KnowledgeSpace;
   attachedSkill?: { name: string; id: string };
   attachedDb?: { db_name: string; db_type: string };
+  historyDatabase?: HistoryDatabase | null;
   taskPlan?: TaskItem[];
   attachedConnectors?: AttachedConnector[];
   citations?: AgentCitation[];
+  taskResult?: TaskResult;
 }
 
 interface ExecutionStep {
+  phase?: string;
   id: string;
   step: number;
   title?: string;
@@ -559,6 +567,15 @@ const Playground: NextPage = () => {
 
   // Contexts
   const [selectedDb, setSelectedDb] = useState<DataSource | null>(null);
+  const databaseSelectionRevisionRef = useRef(0);
+  const pendingHistoryDatabaseRef = useRef<{
+    database: HistoryDatabase | null | undefined; revision: number; request: number; epoch: number;
+  } | null>(null);
+  const chooseDatabase = (database: DataSource | null) => {
+    databaseSelectionRevisionRef.current += 1;
+    pendingHistoryDatabaseRef.current = null;
+    setSelectedDb(database);
+  };
   const [selectedKnowledge, setSelectedKnowledge] = useState<KnowledgeSpace | null>(null);
   // Chat messages state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -953,6 +970,8 @@ const Playground: NextPage = () => {
     // no longer allowed to commit into the blank task that follows.
     taskEpochRef.current += 1;
     historyRequestRef.current += 1;
+    pendingHistoryDatabaseRef.current = null;
+    databaseSelectionRevisionRef.current += 1;
     conversationIdRef.current = null;
     sendInFlightRef.current = false;
     exampleRunInFlightRef.current = false;
@@ -1047,29 +1066,18 @@ const Playground: NextPage = () => {
 
   const startNewTask = useStartNewTask();
 
-  const replyQuestion = useCallback(async (requestId: string, answers: string[][]) => {
-    const res = await fetch(`${process.env.API_BASE_URL ?? ''}/api/v1/chat/question/${requestId}/reply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answers }),
-    });
-    if (res.ok) {
-      setPendingQuestion(null);
-    }
+  const replyQuestion = useCallback(async (requestId: string, answers: string[][], details?: QuestionReplyDetails) => {
+    await submitQuestionReply(requestId, answers, details);
+    setPendingQuestion(null);
   }, []);
 
-  const rejectQuestion = useCallback(async (requestId: string) => {
-    const res = await fetch(`${process.env.API_BASE_URL ?? ''}/api/v1/chat/question/${requestId}/reject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (res.ok) {
-      setPendingQuestion(null);
-    }
+  const rejectQuestion = useCallback(async (requestId: string, convId?: string) => {
+    await submitQuestionReject(requestId, convId);
+    setPendingQuestion(null);
   }, []);
 
   // Fetch Data Sources
-  const { data: dataSources, loading: _loadingSources } = useRequest(async () => {
+  const { data: dataSources, loading: _loadingSources, error: sourceLoadError } = useRequest(async () => {
     try {
       const response: any = await axios.get('/api/v2/serve/datasources');
       // ctx-axios interceptor returns response.data directly, so response is {success, data, ...}
@@ -1081,20 +1089,42 @@ const Playground: NextPage = () => {
           db_type: item.type,
         })) as DataSource[];
       }
-      return [];
+      throw new Error('数据源列表读取失败');
     } catch (e) {
-      console.error('Failed to fetch datasources', e);
-      return [];
+      throw new Error('数据源列表读取失败');
     }
   });
 
+  useEffect(() => {
+    const pending = pendingHistoryDatabaseRef.current;
+    if (!pending || _loadingSources) return;
+    if (pending.revision !== databaseSelectionRevisionRef.current
+      || pending.request !== historyRequestRef.current || pending.epoch !== taskEpochRef.current) {
+      pendingHistoryDatabaseRef.current = null;
+      return;
+    }
+    const restored = matchHistoryDatabase(pending.database, dataSources);
+    if (restored.status === 'loading' && !sourceLoadError) return;
+    pendingHistoryDatabaseRef.current = null;
+    setSelectedDb(restored.database);
+    if (restored.status === 'matched') {
+      setMessages(previous => previous.map(msg => {
+        if (msg.role !== 'human' || msg.attachedDb) return msg;
+        const db = matchHistoryDatabase(historyDatabase({}, msg.context), dataSources).database;
+        return db ? { ...msg, attachedDb: { db_name: db.db_name, db_type: db.db_type } } : msg;
+      }));
+    }
+    if (sourceLoadError) message.warning('数据源列表读取失败，请重试后重新选择数据源');
+    else if (restored.status === 'missing' || restored.status === 'absent') message.warning('请重新选择数据源');
+  }, [dataSources, _loadingSources, sourceLoadError]);
+
   // Fetch Knowledge Bases
-  const { data: knowledgeSpaces, loading: _loadingKnowledge } = useRequest(async () => {
+  const { data: knowledgeSpaces, loading: _loadingKnowledge } = useRequest<ISpace[], []>(async () => {
     try {
       const response = await sendSpacePostRequest('/api/v1/knowledge/space/list', {});
       // ctx-axios interceptor returns response.data directly, so response is {success, data, ...}
-      if (response?.success) {
-        return response.data || [];
+      if (response?.success && Array.isArray(response.data)) {
+        return response.data;
       }
       return [];
     } catch (e) {
@@ -1142,7 +1172,7 @@ const Playground: NextPage = () => {
   // Fetch Skills/DBGPTs list
   const { data: skillsList, loading: _loadingSkills } = useRequest(async () => {
     try {
-      const response = await axios.get(`${process.env.API_BASE_URL ?? ''}/api/v1/skills/list`);
+      const response = await axios.get<unknown, { success: boolean; data: (Skill & { skill_type?: string })[] }>(`${process.env.API_BASE_URL ?? ''}/api/v1/skills/list`);
       // ctx-axios interceptor returns response.data directly
       if (response?.success && Array.isArray(response.data)) {
         return response.data.map((item: any) => ({
@@ -1891,11 +1921,24 @@ const Playground: NextPage = () => {
     overrideSkill?: Skill | null,
     overrideDb?: DataSource | null,
     explicitLegacyFile?: LegacyServerFile | null,
+    rerunMessage?: ChatMessage,
   ) => {
     const effectiveSkill = overrideSkill !== undefined ? overrideSkill : selectedSkill;
     const effectiveDb = overrideDb !== undefined ? overrideDb : selectedDb;
+    if (rerunMessage) {
+      const database = rerunMessage.historyDatabase !== undefined ? rerunMessage.historyDatabase
+        : rerunMessage.attachedDb ? { name: rerunMessage.attachedDb.db_name, type: rerunMessage.attachedDb.db_type }
+        : historyDatabase({}, rerunMessage.context);
+      const restored = matchHistoryDatabase(database, dataSources);
+      if (database && restored.status !== 'matched') {
+        message.warning('请重新选择数据源');
+        return;
+      }
+      if (restored.database) rerunMessage = { ...rerunMessage,
+        attachedDb: { db_name: restored.database.db_name, db_type: restored.database.db_type } };
+    }
     if (
-      (!inputQuery.trim() && !hasSessionFileDrafts && !hasLegacyFile && !explicitLegacyFile) ||
+      (!rerunMessage && !inputQuery.trim() && !hasSessionFileDrafts && !hasLegacyFile && !explicitLegacyFile) ||
       loading ||
       queuedSendAfterUpload
     )
@@ -1922,14 +1965,14 @@ const Playground: NextPage = () => {
     // explicit value, so the first auto-send never waits for React to commit
     // the attachment-rail state. Manual uploads keep the existing queued
     // file_ids flow below; the session-files module rejects protocol mixing.
-    if (explicitLegacyFile) {
+    if (!rerunMessage && explicitLegacyFile) {
       const staged = sessionFiles.stageLegacyForSend(explicitLegacyFile, currentConvId);
       if (!staged.ok) {
         message.error('加载示例失败: ' + staged.error);
         return;
       }
       sendSnapshot = staged.snapshot;
-    } else if (hasSessionFileDrafts || hasLegacyFile) {
+    } else if (!rerunMessage && (hasSessionFileDrafts || hasLegacyFile)) {
       if (sessionFiles.files.some(draft => draft.validation.status !== 'ok')) {
         message.error('存在未通过校验的附件，请先移除后再发送');
         return;
@@ -1970,7 +2013,7 @@ const Playground: NextPage = () => {
     }
     // Construct context prefix for non-legacy queries. Legacy example sends
     // reproduce the old payload, which never carried a context prefix.
-    if (!sendSnapshot?.legacyFile) {
+    if (!rerunMessage && !sendSnapshot?.legacyFile) {
       const contextParts = [];
       if (effectiveDb) contextParts.push(`[Database: ${effectiveDb.db_name}]`);
       if (selectedKnowledge) contextParts.push(`[Knowledge: ${selectedKnowledge.name}]`);
@@ -1989,60 +2032,6 @@ const Playground: NextPage = () => {
     const responseId = generateUUID();
 
     const humanId = generateUUID();
-
-    // Add user message and AI placeholder message
-    setMessages(prev => [
-      ...prev,
-      {
-        id: humanId,
-        role: 'human',
-        context: inputQuery,
-        order: currentOrder,
-        attachedFiles: filesAttachedThisSend ? snapshotsForSend(filesAttachedThisSend) : undefined,
-        attachedKnowledge: selectedKnowledge ?? undefined,
-        attachedSkill: effectiveSkill ? { name: effectiveSkill.name, id: effectiveSkill.id } : undefined,
-        attachedDb: effectiveDb ? { db_name: effectiveDb.db_name, db_type: effectiveDb.db_type } : undefined,
-        attachedConnectors:
-          selectedConnectors.length > 0
-            ? selectedConnectors.map(c => ({
-                id: c.id,
-                connector_type: c.connector_type,
-                display_name: c.display_name,
-              }))
-            : undefined,
-      },
-      {
-        id: responseId,
-        role: 'view',
-        context: '',
-        order: currentOrder,
-        thinking: true,
-      },
-    ]);
-
-    setLoading(true);
-    setQuery(''); // Clear input
-    setStreamingSummary('');
-    setSummaryComplete(false);
-    setSelectedCitationIndex(null);
-    setPendingFinalization(null);
-    setPendingSummaryPresentation(null);
-    setActiveViewMsgId(responseId); // Auto-switch right panel to new round
-
-    const controller = new AbortController();
-    chatAbortControllerRef.current = controller;
-    terminatedStepIdsRef.current.clear();
-    setExecutionMap(prev => ({
-      ...prev,
-      [responseId]: {
-        steps: [],
-        outputs: {},
-        activeStepId: null,
-        collapsed: false,
-        stepThoughts: {},
-      },
-    }));
-    setActiveMessageId(responseId);
 
     // Build ext_info once and reuse it for both the live request and the
     // snapshot captured for "保存定时任务", so a saved task replays the exact
@@ -2064,16 +2053,85 @@ const Playground: NextPage = () => {
     // each scheduled run regenerates) so buildSnapshot replays this real run.
     // version 2 marks the session-file file_ids contract; legacy file_path
     // example sends stay on version 1 so task replay reuses the same protocol.
-    lastSentPayloadRef.current = {
-      version: filesAttachedThisSend && filesAttachedThisSend.fileIds.length > 0 ? 2 : 1,
-      user_input: finalQuery,
-      chat_mode: chatMode,
-      model_name: model,
-      select_param: selectParam,
-      temperature: 0.6,
-      max_new_tokens: 4000,
-      ext_info: extInfo,
+    const requestPayload: ChatReplayPayload = rerunMessage
+      ? getRerunPayload(rerunMessage, model)
+      : {
+          version: filesAttachedThisSend && filesAttachedThisSend.fileIds.length > 0 ? 2 : 1,
+          user_input: finalQuery,
+          chat_mode: chatMode,
+          model_name: model,
+          select_param: selectParam,
+          temperature: 0.6,
+          max_new_tokens: 4000,
+          ext_info: extInfo,
+        };
+
+    lastSentPayloadRef.current = requestPayload;
+
+    const humanMessage: ChatMessage = rerunMessage ?? {
+      role: 'human',
+      context: inputQuery,
+      attachedFiles: filesAttachedThisSend ? snapshotsForSend(filesAttachedThisSend) : undefined,
+      attachedKnowledge: selectedKnowledge ?? undefined,
+      attachedSkill: effectiveSkill ? { name: effectiveSkill.name, id: effectiveSkill.id } : undefined,
+      attachedDb: effectiveDb ? { db_name: effectiveDb.db_name, db_type: effectiveDb.db_type } : undefined,
+      attachedConnectors:
+        selectedConnectors.length > 0
+          ? selectedConnectors.map(c => ({
+              id: c.id,
+              connector_type: c.connector_type,
+              display_name: c.display_name,
+            }))
+          : undefined,
     };
+
+    // Add user message and AI placeholder message
+    setMessages(prev => [
+      ...prev,
+      {
+        ...humanMessage,
+        id: humanId,
+        replayPayload: requestPayload,
+        order: currentOrder,
+      },
+      {
+        id: responseId,
+        role: 'view',
+        context: '',
+        order: currentOrder,
+        thinking: true,
+      },
+    ]);
+
+    setLoading(true);
+    if (!rerunMessage) setQuery('');
+    if (rerunMessage) {
+      setSelectedStepId(null);
+      setActiveSubAgent(null);
+      setRightPanelView('execution');
+    }
+    setStreamingSummary('');
+    setSummaryComplete(false);
+    setSelectedCitationIndex(null);
+    setPendingFinalization(null);
+    setPendingSummaryPresentation(null);
+    setActiveViewMsgId(responseId); // Auto-switch right panel to new round
+
+    const controller = new AbortController();
+    let receivedFinal = false;
+    chatAbortControllerRef.current = controller;
+    terminatedStepIdsRef.current.clear();
+    setExecutionMap(prev => ({
+      ...prev,
+      [responseId]: {
+        steps: [],
+        outputs: {},
+        activeStepId: null,
+        collapsed: false,
+        stepThoughts: {},
+      },
+    }));
+    setActiveMessageId(responseId);
 
     try {
       const response = await fetch(`${process.env.API_BASE_URL ?? ''}/api/v1/chat/react-agent`, {
@@ -2082,14 +2140,8 @@ const Playground: NextPage = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          ...requestPayload,
           conv_uid: currentConvId,
-          chat_mode: chatMode,
-          model_name: model,
-          user_input: finalQuery,
-          temperature: 0.6,
-          max_new_tokens: 4000,
-          select_param: selectParam,
-          ext_info: extInfo,
         }),
         signal: controller.signal,
       });
@@ -2260,7 +2312,7 @@ const Playground: NextPage = () => {
             const nextThoughts = existingThoughts;
             // Check if step already exists - if so, update it (especially phase) instead of creating duplicate
             const existingStepIndex = current.steps.findIndex(s => s.id === id);
-            let nextSteps;
+            let nextSteps: ExecutionStep[];
             if (existingStepIndex >= 0) {
               // Update existing step with new title/phase
               nextSteps = current.steps.map((step, idx) =>
@@ -2274,13 +2326,13 @@ const Playground: NextPage = () => {
                       status: 'running' as const,
                     }
                   : step.status === 'running'
-                    ? { ...step, status: 'done' }
+                    ? { ...step, status: 'done' as const }
                     : step,
               );
             } else {
               // New step - mark running steps as done and add new step
               nextSteps = [
-                ...current.steps.map(item => (item.status === 'running' ? { ...item, status: 'done' } : item)),
+                ...current.steps.map(item => (item.status === 'running' ? { ...item, status: 'done' as const } : item)),
                 {
                   id,
                   step: payload.step,
@@ -2434,6 +2486,7 @@ const Playground: NextPage = () => {
           // action_reason, which are constrained to concise, readable text.
           return;
         } else if (payload.type === 'final') {
+          receivedFinal = true;
           const finalAnswer = decodeFinalEvent(payload);
           const summaryText = cleanFinalContent(finalAnswer.content);
           cancelSummaryPresentation();
@@ -2441,7 +2494,9 @@ const Playground: NextPage = () => {
             const current = prev[responseId];
             if (!current) return prev;
             const nextSteps = current.steps.map(item =>
-              item.status === 'running' ? { ...item, status: 'done' as const } : item,
+              item.status === 'running'
+                ? { ...item, status: finalAnswer.taskResult?.status === 'succeeded' ? 'done' as const : 'failed' as const }
+                : item,
             );
             return { ...prev, [responseId]: { ...current, steps: nextSteps } };
           });
@@ -2452,6 +2507,7 @@ const Playground: NextPage = () => {
                 ...msg,
                 context: summaryText,
                 citations: finalAnswer.citations,
+                taskResult: finalAnswer.taskResult,
                 thinking: false,
               };
             }),
@@ -2502,6 +2558,11 @@ const Playground: NextPage = () => {
         buffer = parts.pop() || '';
         parts.forEach(processEvent);
       }
+      if (buffer.trim()) processEvent(buffer);
+      if (!receivedFinal && !controller.signal.aborted) {
+        processEvent(`data: ${JSON.stringify({ type: 'final', content: '连接已结束，任务未完成。',
+          task_result: { status: 'incomplete', reason: 'stream_closed', missing: [] } })}`);
+      }
     } catch (err: any) {
       if (err?.name === 'AbortError' || controller.signal.aborted) {
         // User-initiated stop (stop button, or the conversation-switch effect
@@ -2526,6 +2587,7 @@ const Playground: NextPage = () => {
               return {
                 ...msg,
                 context: partial ? `${partial}\n\n_${stoppedMark}_` : `_${stoppedMark}_`,
+                taskResult: { status: 'cancelled', reason: 'user_cancelled', missing: [] },
                 thinking: false,
               };
             }),
@@ -2541,6 +2603,7 @@ const Playground: NextPage = () => {
           if (lastMsg && lastMsg.role === 'view') {
             lastMsg.context = err?.message || 'Error occurred';
             lastMsg.thinking = false;
+            lastMsg.taskResult = { status: 'failed', reason: 'connection_error', missing: [] };
           }
           return newMessages;
         });
@@ -2573,7 +2636,7 @@ const Playground: NextPage = () => {
 
   const handleExampleClick = async (example: (typeof EXAMPLE_CARDS)[number]) => {
     const queryKey = `example_${example.id}_query`;
-    const queryVal = t(queryKey) as string;
+    const queryVal = t(queryKey, { defaultValue: example.query });
     const translatedQuery = (queryVal && queryVal !== queryKey ? queryVal : example.query) as string;
 
     if (loading || sendInFlightRef.current || exampleRunInFlightRef.current) return;
@@ -2596,7 +2659,7 @@ const Playground: NextPage = () => {
         }
         exampleController = new AbortController();
         exampleAbortControllerRef.current = exampleController;
-        const res = await axios.post(
+        const res = await axios.post<unknown, { success: boolean; data: string; err_msg?: string }>(
           `${process.env.API_BASE_URL ?? ''}/api/v1/examples/use`,
           {
             example_id: example.id,
@@ -2677,6 +2740,7 @@ const Playground: NextPage = () => {
 
   const restoreFromHistory = (
     historyMessages: Array<{ role: string; context: string; order?: number; model_name?: string }>,
+    databaseRevision = databaseSelectionRevisionRef.current,
   ) => {
     cancelSummaryPresentation();
     setExecutionMap({});
@@ -2694,10 +2758,13 @@ const Playground: NextPage = () => {
     const newExecutionMap: typeof executionMap = {};
     const allArtifacts: Artifact[] = [];
     const restoredSkillNames: Record<string, string> = {};
+    let latestDatabase: HistoryDatabase | null | undefined;
 
     historyMessages.forEach(msg => {
       if (msg.role === 'human') {
-        newMessages.push({ id: generateUUID(), role: 'human', context: msg.context, order: msg.order });
+        newMessages.push({
+          id: generateUUID(), role: 'human', context: msg.context, order: msg.order, model_name: msg.model_name,
+        });
       } else if (msg.role === 'view') {
         const viewId = generateUUID();
         let payload: any = null;
@@ -2705,6 +2772,15 @@ const Playground: NextPage = () => {
           payload = JSON.parse(msg.context);
         } catch {
           /* ignore parse failure */
+        }
+
+        const sourceHuman = [...newMessages].reverse().find(m => m.role === 'human');
+        latestDatabase = historyDatabase(payload || {}, sourceHuman?.context || '');
+        if (sourceHuman && latestDatabase !== undefined) sourceHuman.historyDatabase = latestDatabase;
+        const sourceMatch = matchHistoryDatabase(latestDatabase, dataSources);
+        if (sourceHuman && latestDatabase && (latestDatabase.type || sourceMatch.database?.db_type)) {
+          sourceHuman.attachedDb = { db_name: latestDatabase.name,
+            db_type: latestDatabase.type || sourceMatch.database!.db_type };
         }
 
         if (payload && (payload.version === 1 || payload.version === 2) && payload.type === 'react-agent') {
@@ -2826,6 +2902,7 @@ const Playground: NextPage = () => {
             role: 'view',
             context: finalContent,
             citations: historyAnswer.citations,
+            taskResult: historyAnswer.taskResult,
             order: msg.order,
             thinking: false,
             taskPlan: Array.isArray(payload.task_plan)
@@ -2841,6 +2918,7 @@ const Playground: NextPage = () => {
             role: 'view',
             context: cleanFinalContent(historyAnswer.content),
             citations: historyAnswer.citations,
+            taskResult: historyAnswer.taskResult,
             order: msg.order,
             thinking: false,
           });
@@ -2849,6 +2927,18 @@ const Playground: NextPage = () => {
     });
 
     setMessages(newMessages);
+    if (databaseRevision === databaseSelectionRevisionRef.current) {
+      const restored = matchHistoryDatabase(latestDatabase, dataSources);
+      setSelectedDb(restored.database);
+      if (restored.status === 'loading' && !sourceLoadError) {
+        pendingHistoryDatabaseRef.current = { database: latestDatabase, revision: databaseRevision,
+          request: historyRequestRef.current, epoch: taskEpochRef.current };
+      } else if (sourceLoadError) {
+        message.warning('数据源列表读取失败，请重试后重新选择数据源');
+      } else if (restored.status === 'missing' || restored.status === 'absent') {
+        message.warning('请重新选择数据源');
+      }
+    }
     setExecutionMap(newExecutionMap);
     setArtifacts(allArtifacts);
     if (Object.keys(restoredSkillNames).length > 0) {
@@ -2867,6 +2957,9 @@ const Playground: NextPage = () => {
   const loadConversation = async (convUid: string) => {
     const requestVersion = ++historyRequestRef.current;
     const taskEpoch = taskEpochRef.current;
+    const databaseRevision = databaseSelectionRevisionRef.current;
+    pendingHistoryDatabaseRef.current = null;
+    setSelectedDb(null);
     historyAbortControllerRef.current?.abort();
     const controller = new AbortController();
     historyAbortControllerRef.current = controller;
@@ -2896,6 +2989,7 @@ const Playground: NextPage = () => {
             order: m.order,
             model_name: m.model_name,
           })),
+          databaseRevision,
         );
       }
     } catch (e) {
@@ -3049,7 +3143,7 @@ const Playground: NextPage = () => {
               <div
                 className={`${rightPanelCollapsed ? 'flex-1 max-w-[800px] border-r-0' : 'flex-[2] min-w-0 border-r border-gray-200/80 dark:border-gray-800'} min-h-0 flex flex-col overflow-hidden bg-white dark:bg-[#111217] transition-all duration-300 relative`}
               >
-                <div className='flex-1 min-h-0 overflow-y-auto'>
+                <div className='chat-history-scroll flex-1 min-h-0' data-testid='chat-history-scroll'>
                   {rounds.map((round, roundIndex) => {
                     const isLastRound = roundIndex === rounds.length - 1;
                     const isSelected = round.viewMsg?.id === selectedViewMsgId;
@@ -3061,7 +3155,7 @@ const Playground: NextPage = () => {
                       activeStep: _activeStep,
                       outputs: _outputs,
                       stepThoughts,
-                    } = convertToManusFormat(execution, round.humanMsg?.context, t);
+                    } = convertToManusFormat(execution, round.humanMsg?.context, key => t(key, { defaultValue: key }));
                     const isWorking =
                       (isLastRound &&
                         (round.viewMsg?.thinking || execution?.steps.some(s => s.status === 'running'))) ||
@@ -3075,6 +3169,7 @@ const Playground: NextPage = () => {
 
                     return (
                       <ManusLeftPanel
+                        taskResult={round.viewMsg?.taskResult}
                         key={round.viewMsg?.id || round.humanMsg?.id || `round-${roundIndex}`}
                         sections={sections}
                         subAgentSlot={
@@ -3244,7 +3339,7 @@ const Playground: NextPage = () => {
                         {selectedDb && (
                           <Tag
                             closable
-                            onClose={() => setSelectedDb(null)}
+                            onClose={() => chooseDatabase(null)}
                             className='flex items-center gap-1 bg-blue-50 border-blue-200 text-blue-700 px-3 py-1 rounded-full'
                           >
                             {getDbIcon(selectedDb.type)} <span className='font-medium ml-1'>{selectedDb.db_name}</span>
@@ -3279,6 +3374,7 @@ const Playground: NextPage = () => {
                       {pendingQuestion && (
                         <div className='mb-3 w-full'>
                           <QuestionDock
+                            key={pendingQuestion.request_id}
                             request={{
                               request_id: pendingQuestion.request_id,
                               conv_id: pendingQuestion.conv_id,
@@ -3831,11 +3927,12 @@ const Playground: NextPage = () => {
                 ) : (
                   (() => {
                     const activeViewMsg = messages.find(m => m.id === selectedViewMsgId && m.role === 'view');
+                    const rerunMessage = rounds.find(round => round.viewMsg?.id === activeViewMsg?.id)?.humanMsg;
                     const rawExecution = activeViewMsg?.id ? executionMap[activeViewMsg.id] : undefined;
                     // Respect user's manual step selection for the right panel
                     const execution =
                       rawExecution && selectedStepId ? { ...rawExecution, activeStepId: selectedStepId } : rawExecution;
-                    const _converted = convertToManusFormat(execution, undefined, t);
+                    const _converted = convertToManusFormat(execution, undefined, key => t(key, { defaultValue: key }));
                     let activeStep = _converted.activeStep;
                     let outputs = _converted.outputs;
                     let isRunning = execution?.steps.some(s => s.status === 'running') || false;
@@ -3893,7 +3990,13 @@ const Playground: NextPage = () => {
                         databaseType={selectedDb?.db_type}
                         databaseName={selectedDb?.db_name}
                         isRunning={isRunning}
-                        onRerun={router.query.from_task ? undefined : () => {}}
+                        onRerun={
+                          router.query.from_task || loading || queuedSendAfterUpload || !rerunMessage
+                            ? undefined
+                            : () => {
+                                void handleStart(rerunMessage.context, undefined, undefined, undefined, rerunMessage);
+                              }
+                        }
                         onShare={!loading && !!conversationId ? handleShare : undefined}
                         onSchedule={
                           !loading && !!conversationId && !router.query.from_task
@@ -4010,7 +4113,7 @@ const Playground: NextPage = () => {
                           {selectedDb && (
                             <Tag
                               closable
-                              onClose={() => setSelectedDb(null)}
+                              onClose={() => chooseDatabase(null)}
                               className='flex items-center gap-1 bg-blue-50 border-blue-200 text-blue-700 px-3 py-1 rounded-full'
                             >
                               {getDbIcon(selectedDb.type)}{' '}
@@ -4438,7 +4541,7 @@ const Playground: NextPage = () => {
                                       <div
                                         key={ds.id}
                                         onClick={() => {
-                                          setSelectedDb(ds);
+                                          chooseDatabase(ds);
                                           setIsDbPanelOpen(false);
                                           setDbSearchQuery('');
                                         }}
@@ -4774,15 +4877,15 @@ const Playground: NextPage = () => {
                             <h3 className='text-sm font-semibold text-gray-800 dark:text-gray-200 mb-1'>
                               {(() => {
                                 const key = `example_${example.id}_title`;
-                                const val = t(key) as string;
-                                return val && val !== key ? val : example.title;
+                                const val = t(key, { defaultValue: key });
+                                return typeof val === 'string' && val !== key ? val : example.title;
                               })()}
                             </h3>
                             <p className='text-xs text-gray-500 dark:text-gray-400 line-clamp-2'>
                               {(() => {
                                 const key = `example_${example.id}_desc`;
-                                const val = t(key) as string;
-                                return val && val !== key ? val : example.description;
+                                const val = t(key, { defaultValue: key });
+                                return typeof val === 'string' && val !== key ? val : example.description;
                               })()}
                             </p>
                           </div>
@@ -4833,7 +4936,7 @@ const Playground: NextPage = () => {
               <List.Item
                 className={`cursor-pointer hover:bg-gray-50 rounded-lg px-2 transition-colors ${selectedDb?.id === item.id ? 'bg-blue-50' : ''}`}
                 onClick={() => {
-                  setSelectedDb(item);
+                  chooseDatabase(item);
                   setIsDbModalOpen(false);
                 }}
                 actions={[selectedDb?.id === item.id && <CheckCircleFilled className='text-blue-500' />]}

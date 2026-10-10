@@ -5,6 +5,7 @@ import useChat, { ChatContextStatus, PendingQuestionEvent } from '@/hooks/use-ch
 import ChatContentContainer from '@/new-components/chat/ChatContentContainer';
 import ChatDefault from '@/new-components/chat/content/ChatDefault';
 import QuestionDock from '@/new-components/chat/content/QuestionDock';
+import type { QuestionReplyDetails } from '@/utils/question-reply';
 import ChatInputPanel from '@/new-components/chat/input/ChatInputPanel';
 import ChatSider from '@/new-components/chat/sider/ChatSider';
 import { IApp } from '@/types/app';
@@ -55,8 +56,8 @@ interface ChatContentProps {
   contextStatus: ChatContextStatus | null;
   // Human-in-the-loop question
   pendingQuestion: PendingQuestionEvent | null;
-  replyQuestion: (requestId: string, answers: string[][]) => Promise<void>;
-  rejectQuestion: (requestId: string) => Promise<void>;
+  replyQuestion: (requestId: string, answers: string[][], details?: QuestionReplyDetails) => Promise<void>;
+  rejectQuestion: (requestId: string, convId?: string) => Promise<void>;
 }
 export const ChatContentContext = createContext<ChatContentProps>({
   history: [],

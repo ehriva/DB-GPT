@@ -48,7 +48,7 @@ const NativeApp: React.FC<{
     const res = await Promise.all([
       apiInterceptors(getNativeAppScenes()),
       apiInterceptors(getAppStrategyValues('priority')),
-    ]);
+    ] as const);
     const [types, models] = res;
     form.setFieldValue('chat_scene', team_context?.chat_scene);
     form.setFieldValue('model', param_need?.find(param => param.type === 'model')?.value);
@@ -56,7 +56,7 @@ const NativeApp: React.FC<{
     form.setFieldValue('max_new_tokens', param_need?.find(param => param.type === 'max_new_tokens')?.value);
     form.setFieldValue('prompt_template', param_need?.find(param => param.type === 'prompt_template')?.value);
     await run(param_need?.find(param => param.type === 'resource')?.value || '');
-    return [types, models] ?? [];
+    return [types, models] as const;
   });
 
   // 获取prompt提示语列表
@@ -156,7 +156,7 @@ const NativeApp: React.FC<{
   ]);
 
   useEffect(() => {
-    const type = (data?.[0]?.[1]?.find((type: any) => type.chat_scene === chatScene) as any)?.param_need?.find(
+    const type = (data?.[0]?.[1]?.find(type => type.chat_scene === chatScene))?.param_need?.find(
       (param: any) => param.type === 'resource',
     )?.value;
     run(type || '');

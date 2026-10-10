@@ -1,3 +1,4 @@
+import type { ISpace } from '@/types/knowledge';
 import { apiInterceptors, getSpaceList } from '@/client/api';
 import { ChatContentContext } from '@/pages/chat';
 import { BookOutlined } from '@ant-design/icons';
@@ -6,11 +7,7 @@ import { Select, Tooltip } from 'antd';
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-interface ISpace {
-  name: string;
-  desc: string;
-  id?: string;
-}
+
 
 const KnowledgeSelector: React.FC = () => {
   const { t } = useTranslation();

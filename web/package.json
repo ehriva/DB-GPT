@@ -19,9 +19,14 @@
     "format": "prettier --write '**/*.{ts,tsx}'",
     "export": "next export",
     "compile": " NODE_OPTIONS=--max_old_space_size=8192 next build && next export",
-    "test": "npm run test:react-final && npm run test:final-presentation",
+    "test": "npm run test:react-final && npm run test:final-presentation && npm run test:chat-rerun && npm run test:question-reply && npm run test:task-plan-summary && npm run test:history-datasource",
+    "test:history-datasource": "tsc --target ES2020 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck --strict --outDir node_modules/.cache/history-datasource-tests utils/history-datasource.ts utils/history-datasource.test.ts && node node_modules/.cache/history-datasource-tests/history-datasource.test.js",
+    "test:question-reply": "tsc --target ES2020 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck --strict --outDir node_modules/.cache/question-reply-tests utils/question-reply.ts utils/question-reply.test.ts && node node_modules/.cache/question-reply-tests/question-reply.test.js",
+    "test:chat-rerun": "tsc --target ES2020 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck --strict --outDir node_modules/.cache/chat-rerun-tests utils/chat-rerun.ts utils/chat-rerun.test.ts && node node_modules/.cache/chat-rerun-tests/utils/chat-rerun.test.js",
     "test:react-final": "tsc --target ES2020 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck --strict --outDir node_modules/.cache/react-final-tests utils/react-agent-final.ts utils/react-agent-final.test.ts && node node_modules/.cache/react-final-tests/react-agent-final.test.js",
-    "test:final-presentation": "tsc --target ES2020 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck --strict --outDir node_modules/.cache/final-presentation-tests utils/final-presentation.ts utils/final-presentation.test.ts && node node_modules/.cache/final-presentation-tests/final-presentation.test.js"
+    "test:final-presentation": "tsc --target ES2020 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck --strict --outDir node_modules/.cache/final-presentation-tests utils/final-presentation.ts utils/final-presentation.test.ts && node node_modules/.cache/final-presentation-tests/final-presentation.test.js",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test:task-plan-summary": "tsc --target ES2020 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck --strict --outDir node_modules/.cache/task-plan-tests utils/task-plan-summary.ts utils/task-plan-summary.test.ts && node node_modules/.cache/task-plan-tests/task-plan-summary.test.js"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^1.18.4",

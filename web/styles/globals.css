@@ -59,7 +59,8 @@ body {
 
 /* 自定义滚动条样式 */
 ::-webkit-scrollbar {
-  display: none;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -68,10 +69,40 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: #888;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+.chat-history-scroll {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #888 #f1f1f1;
+}
+
+.chat-history-scroll::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+}
+
+.dark .chat-history-scroll {
+  color-scheme: dark;
+  scrollbar-color: #5b6170 #191b22;
+}
+
+.dark .chat-history-scroll::-webkit-scrollbar-track {
+  background: #191b22;
+}
+
+.dark .chat-history-scroll::-webkit-scrollbar-thumb {
+  background: #5b6170;
+}
+
+.dark .chat-history-scroll::-webkit-scrollbar-thumb:hover {
+  background: #778091;
 }
 
 

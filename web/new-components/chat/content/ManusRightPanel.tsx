@@ -1885,7 +1885,7 @@ const TerminalRenderer: React.FC<{
             <Tooltip title='复制全部'>
               <button
                 className='flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-gray-700/50'
-                onClick={() => copyToClipboard(allText)}
+                onClick={() => copyToClipboard(allText, '已复制')}
               >
                 <CopyOutlined className='text-xs' />
               </button>

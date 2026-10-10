@@ -13,7 +13,7 @@ interface NewFormDialogProps {
   choiceDBType?: DBType;
   getFromRenderData?: ConfigurableParams[];
   dbNames?: string[];
-  dbTypeData?: DBOption[];
+  dbTypeData?: Record<string, unknown>;
   description?: string;
 }
 

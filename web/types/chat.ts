@@ -1,4 +1,4 @@
-import type { AgentCitation } from '@/utils/react-agent-final';
+import type { AgentCitation, TaskResult } from '@/utils/react-agent-final';
 import { ParamNeed } from './app';
 
 // Define the content types for the message object
@@ -106,6 +106,7 @@ export type IChatDialogueMessageSchema = {
   feedback?: Record<string, any>;
   /** Structured knowledge sources attached to an agent final answer. */
   citations?: AgentCitation[];
+  taskResult?: TaskResult;
 };
 
 export type ModelType =

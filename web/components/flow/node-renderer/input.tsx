@@ -7,8 +7,11 @@ const getIconComponent = (iconString: string) => {
   const match = iconString.match(/^icon:(\w+)$/);
   if (match) {
     const iconName = match[1] as keyof typeof Icons;
-    const IconComponent = Icons[iconName];
-    return IconComponent ? <IconComponent /> : null;
+    if (!/(Outlined|Filled|TwoTone)$/.test(iconName)) return null;
+    const candidate = Icons[iconName];
+    if (!candidate || typeof candidate !== 'object' || !('$$typeof' in candidate)) return null;
+    const IconComponent = candidate as typeof Icons.InfoCircleOutlined;
+    return <IconComponent />;
   }
   return null;
 };

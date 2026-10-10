@@ -160,7 +160,7 @@ function DbEditor() {
   const [editorValue, setEditorValue] = useState<EditorValueProps | EditorValueProps[]>();
   const [newEditorValue, setNewEditorValue] = useState<EditorValueProps>();
   const latestSqlRef = useRef<string | undefined>(undefined);
-  const [tableData, setTableData] = useState<{ columns: string[]; values: (string | number)[] }>();
+  const [tableData, setTableData] = useState<{ columns: string[]; values: (string | number)[][] }>();
   const [currentTabIndex, setCurrentTabIndex] = useState<number>();
   const [isMenuExpand, setIsMenuExpand] = useState<boolean>(false);
   const [layout, setLayout] = useState<'TB' | 'LR'>('TB');
@@ -196,7 +196,7 @@ function DbEditor() {
     if (newEditorValue?.sql !== undefined) {
       return newEditorValue.sql.trim();
     }
-    const persisted = Array.isArray(editorValue) ? editorValue?.[currentTabIndex ?? 0]?.sql : editorValue?.sql;
+    const persisted = Array.isArray(editorValue) ? currentEditor?.sql : currentEditor?.sql;
     return (persisted || '').trim();
   };
 
@@ -282,6 +282,8 @@ function DbEditor() {
     },
   );
 
+  const currentEditor = Array.isArray(editorValue) ? editorValue[currentTabIndex ?? 0] : editorValue;
+
   const { run: submitSql, loading: submitLoading } = useRequest(
     async () => {
       const db_name = resolveDbName();
@@ -293,8 +295,8 @@ function DbEditor() {
         conv_uid: id,
         db_name,
         conv_round: currentRound,
-        old_sql: editorValue?.sql,
-        old_speak: editorValue?.thoughts,
+        old_sql: currentEditor?.sql,
+        old_speak: currentEditor?.thoughts,
         new_sql: newEditorValue?.sql,
         new_speak: newEditorValue?.thoughts?.match(/^\n--(.*)\n\n$/)?.[1]?.trim() || newEditorValue?.thoughts,
       });
@@ -320,7 +322,7 @@ function DbEditor() {
         conv_uid: id,
         chart_title: newEditorValue?.title,
         db_name,
-        old_sql: editorValue?.[currentTabIndex ?? 0]?.sql,
+        old_sql: currentEditor?.sql,
         new_chart_type: newEditorValue?.showcase,
         new_sql: newEditorValue?.sql,
         new_comment: newEditorValue?.thoughts?.match(/^\n--(.*)\n\n$/)?.[1]?.trim() || newEditorValue?.thoughts,

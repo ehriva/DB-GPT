@@ -5,10 +5,13 @@ const path = require("path");
 const nextConfig = {
   experimental: {
     esmExternals: "loose",
+    cpus: 1,
+    workerThreads: true,
   },
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
+  staticPageGenerationTimeout: 180,
   async rewrites() {
     return [
       {
@@ -18,7 +21,7 @@ const nextConfig = {
     ];
   },
   env: {
-    API_BASE_URL: "http://127.0.0.1:5670",
+    API_BASE_URL: process.env.API_BASE_URL ?? "",
     GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID,
     GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
     GET_USER_URL: process.env.GET_USER_URL,

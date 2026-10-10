@@ -15,11 +15,11 @@ import { CodePreview } from './code-preview';
  * @param {string} props.code HTML code content
  * @param {string} props.language Code language, default is html
  */
-const HtmlPreview = ({ code, language = 'html' }) => {
+const HtmlPreview = ({ code, language = 'html' }: { code: string; language?: string }) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const iframeRef = useRef(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const { t } = useTranslation();
   const [parsedCode, setParsedCode] = useState({
     html: '',
@@ -30,7 +30,7 @@ const HtmlPreview = ({ code, language = 'html' }) => {
 
   // Parse the code and extract the HTML, CSS, and JS parts
   useEffect(() => {
-    const parseCode = sourceCode => {
+    const parseCode = (sourceCode: string) => {
       let html = sourceCode;
       let css = '';
       let js = '';
@@ -95,10 +95,10 @@ const HtmlPreview = ({ code, language = 'html' }) => {
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(
-        document.fullscreenElement ||
+        Boolean(document.fullscreenElement ||
           document.webkitFullscreenElement ||
           document.mozFullScreenElement ||
-          document.msFullscreenElement,
+          document.msFullscreenElement),
       );
     };
 

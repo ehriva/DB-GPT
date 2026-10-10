@@ -8,7 +8,7 @@ import {
 } from '@/client/api';
 import BlurredCard, { ChatButton } from '@/new-components/common/blurredCard';
 import ConstructLayout from '@/new-components/layout/Construct';
-import { IAgentPlugin, PostAgentQueryParams } from '@/types/agent';
+import { IAgentPlugin, IMyPlugin, PostAgentQueryParams } from '@/types/agent';
 import { ClearOutlined, DownloadOutlined, SyncOutlined } from '@ant-design/icons';
 import { useRequest } from 'ahooks';
 import { Button, Segmented, SegmentedProps, Spin, Tag, message } from 'antd';
@@ -40,19 +40,17 @@ function Agent() {
     data: agents = [],
     loading,
     refresh,
-  } = useRequest<IAgentPlugin[], []>(
+  } = useRequest<(IAgentPlugin | IMyPlugin)[], []>(
     async () => {
       if (activeKey === 'my') {
         const [err, res] = await apiInterceptors(postAgentMy());
         setIsError(!!err);
-        return res ?? [];
+        return res?.items ?? [];
       }
       const queryParams: PostAgentQueryParams = {
         page_index: pagination.pageNo,
         page_size: pagination.pageSize,
-        filter: {
-          name: searchValue || undefined,
-        },
+        name: searchValue || undefined,
       };
       const [err, res] = await apiInterceptors(postAgentQuery(queryParams));
       setIsError(!!err);
@@ -143,28 +141,28 @@ function Agent() {
             <BlurredCard
               logo='/pictures/agent.png'
               onClick={() => {
-                if (agent.storage_url) window.open(agent.storage_url, '_blank');
+                if ('storage_url' in agent && agent.storage_url) window.open(agent.storage_url, '_blank');
               }}
               description={agent.description}
               name={agent.name}
               key={agent.id}
               Tags={
                 <div>
-                  {agent.author && <Tag>{agent.author}</Tag>}
+                  {'author' in agent && agent.author && <Tag>{agent.author}</Tag>}
                   {agent.version && <Tag>v{agent.version}</Tag>}
                   {agent.type && <Tag>Type {agent.type}</Tag>}
-                  {agent.storage_channel && <Tag>{agent.storage_channel}</Tag>}
+                  {'storage_channel' in agent && agent.storage_channel && <Tag>{agent.storage_channel}</Tag>}
                 </div>
               }
               LeftBottom={
                 <div className='flex gap-2'>
-                  {agent.author && <span>{agent.author}</span>}
-                  {agent.author && <span>•</span>}
-                  {agent?.gmt_created && <span>{moment(agent?.gmt_created).fromNow() + ' ' + t('update')}</span>}
+                  {'author' in agent && agent.author && <span>{agent.author}</span>}
+                  {'author' in agent && agent.author && <span>•</span>}
+                  <span>{moment('gmt_created' in agent ? agent.gmt_created : agent.created_at).fromNow() + ' ' + t('update')}</span>
                 </div>
               }
               RightBottom={
-                agent.installed || activeKey == 'my' ? (
+                ('installed' in agent && agent.installed) || activeKey == 'my' ? (
                   <ChatButton
                     Icon={<ClearOutlined />}
                     text='Uninstall'

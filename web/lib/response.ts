@@ -1,4 +1,3 @@
-import { ERROR_CODE } from '@/utils/constants';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 type IApiResponse<T = any> = {
@@ -6,7 +5,7 @@ type IApiResponse<T = any> = {
   success: boolean;
   message: string;
   data: T;
-  errorCode?: ERROR_CODE | (string & {});
+  errorCode?: string | number;
 };
 
 type Methods = 'GET' | 'OPTIONS' | 'PUT' | 'POST' | 'PATCH' | 'DELETE' | (string & {});

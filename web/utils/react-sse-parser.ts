@@ -54,6 +54,7 @@ export interface SSEFinalEvent {
   content: string;
   protocol_version?: number;
   citations?: unknown[];
+  task_result?: unknown;
 }
 
 export interface SSETaskPreviewEvent {
@@ -82,14 +83,23 @@ export interface SSEContextStatusEvent {
 export interface QuestionOption {
   label: string;
   description: string;
+  sources?: Array<{ title: string; url: string }>;
+  source_type?: string;
+  record_id?: string;
+  formula?: string;
+  formula_confirmed?: boolean;
+  aliases?: string[];
 }
 
 export interface QuestionInfo {
   question: string;
   header: string;
-  options: QuestionOption[];
+  options?: QuestionOption[];
   multiple?: boolean;
   custom?: boolean;
+  kind?: 'term';
+  term?: string;
+  datasource?: string;
 }
 
 export interface SSEQuestionAskedEvent {
@@ -274,6 +284,16 @@ export class ReActSSEState {
     this.finalAnswer = decodeFinalEvent(event);
   }
 
+  finishInterruptedStream(): void {
+    if (!this.isDone) {
+      if (!this.finalAnswer.taskResult) {
+        this.finalAnswer = { ...this.finalAnswer,
+          taskResult: { status: 'incomplete', reason: 'stream_closed', missing: [] } };
+      }
+      this.handleDone();
+    }
+  }
+
   private handleDone(): void {
     this.isDone = true;
     this.endTime = Date.now();
@@ -445,6 +465,7 @@ export class ReActSSEState {
     return {
       content: this.finalAnswer.content,
       citations: [...this.finalAnswer.citations],
+      ...(this.finalAnswer.taskResult ? { taskResult: this.finalAnswer.taskResult } : {}),
     };
   }
 

@@ -4,6 +4,7 @@ import ChatHeader from './ChatHeader';
 import ChatMessageList, { ChatTurn } from './ChatMessageList';
 import ChatWelcome from './ChatWelcome';
 import QuestionDock, { QuestionRequest } from './content/QuestionDock';
+import type { QuestionReplyDetails } from '@/utils/question-reply';
 import { SlashCommand } from './input/CommandPopover';
 import { ContentPart } from './input/EnhancedChatInput';
 import StandaloneChatInput, { StandaloneChatInputRef } from './input/StandaloneChatInput';
@@ -29,8 +30,8 @@ export interface ChatPageProps {
   showSteps?: boolean;
 
   pendingQuestion?: QuestionRequest | null;
-  onReplyQuestion?: (requestId: string, answers: string[][]) => void;
-  onRejectQuestion?: (requestId: string) => void;
+  onReplyQuestion?: (requestId: string, answers: string[][], details?: QuestionReplyDetails) => void | Promise<void>;
+  onRejectQuestion?: (requestId: string, convId?: string) => void | Promise<void>;
 
   headerExtra?: React.ReactNode;
   welcomeExtra?: React.ReactNode;

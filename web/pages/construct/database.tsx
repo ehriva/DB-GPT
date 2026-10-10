@@ -29,7 +29,7 @@ function Database() {
     open: boolean;
     info?: string;
     dbType?: DBType;
-    dbTypeData?: any[];
+    dbTypeData?: Record<string, unknown>;
     description?: string;
   }>({ open: false });
   const [draw, setDraw] = useState<{
@@ -169,10 +169,8 @@ function Database() {
               className='border-none text-white bg-button-gradient'
               icon={<PlusOutlined />}
               onClick={() => {
-                console.log(dbList);
-                console.log(dbTypeList);
 
-                setModal({ open: true, dbTypeData: dbTypeList });
+                setModal({ open: true });
               }}
             >
               {t('Add_Datasource')}
@@ -207,7 +205,7 @@ function Database() {
           choiceDBType={modal.dbType}
           editValue={modal.info}
           dbTypeData={modal.dbTypeData}
-          dbNames={dbList.map(item => item.params.database)}
+          dbNames={dbList.map(item => item.params.database || item.name)}
           onSuccess={() => {
             setModal({ open: false });
             refreshDbList();
@@ -239,7 +237,7 @@ function Database() {
               {dbListByType[draw.type].map(item => (
                 <Card
                   key={item.params?.database || item.params?.path || ''}
-                  title={item.params?.database || getFileName(item.params?.path) || ''}
+                  title={item.params?.database || getFileName(item.params?.path || '') || ''}
                   extra={
                     <>
                       <RedoOutlined
@@ -272,7 +270,7 @@ function Database() {
                       .filter(key => Object.prototype.hasOwnProperty.call(item.params, key))
                       .map(key => (
                         <p key={key}>
-                          {key}: {key === 'path' ? getFileName(item.params[key]) : item.params[key]}
+                          {key}: {key === 'path' ? getFileName(String(item.params[key] ?? '')) : String(item.params[key] ?? '')}
                         </p>
                       ))}
                   </>

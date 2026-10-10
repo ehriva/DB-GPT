@@ -8,6 +8,7 @@
 import { CheckCircleFilled, ClockCircleOutlined, MinusCircleOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { summarizeTaskPlan } from '@/utils/task-plan-summary';
 
 export interface TaskItem {
   content: string;
@@ -38,18 +39,9 @@ const TaskPlanCard: React.FC<TaskPlanCardProps> = ({ tasks, defaultCollapsed = t
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
 
-  const { total, done, currentTask } = useMemo(() => {
-    const active = tasks.filter(t => t.status !== 'cancelled');
-    return {
-      total: active.length,
-      done: active.filter(t => t.status === 'completed').length,
-      currentTask: active.find(t => t.status === 'in_progress') || active.find(t => t.status === 'pending'),
-    };
-  }, [tasks]);
+  const { total, done, cancelled, currentTask, allDone } = useMemo(() => summarizeTaskPlan(tasks), [tasks]);
 
   if (tasks.length === 0) return null;
-
-  const allDone = done === total && total > 0;
 
   return (
     <div
@@ -71,6 +63,7 @@ const TaskPlanCard: React.FC<TaskPlanCardProps> = ({ tasks, defaultCollapsed = t
           <div className='min-w-0'>
             <div className='font-semibold leading-5 tracking-tight'>
               {allDone ? t('task_plan_all_done', { total }) : t('task_plan_progress_summary', { total, done })}
+              {cancelled > 0 && <> · {t('task_plan_cancelled_count', { count: cancelled })}</>}
             </div>
             {collapsed && currentTask && !allDone && (
               <div className='truncate text-[11px] leading-4 text-slate-400 dark:text-slate-500'>
@@ -97,9 +90,7 @@ const TaskPlanCard: React.FC<TaskPlanCardProps> = ({ tasks, defaultCollapsed = t
       {/* Task list */}
       {!collapsed && (
         <ul className='max-h-[220px] space-y-1 overflow-y-auto overscroll-contain px-3.5 py-2.5'>
-          {tasks
-            .filter(t => t.status !== 'cancelled')
-            .map((task, i) => (
+          {tasks.map((task, i) => (
               <li
                 key={i}
                 className={`flex items-start gap-2.5 rounded-md px-1.5 py-1 leading-5 ${

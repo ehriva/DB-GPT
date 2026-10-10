@@ -18,7 +18,7 @@ import ManusRightPanel, {
   PanelView,
 } from '@/new-components/chat/content/ManusRightPanel';
 import { buildActionDisplayText } from '@/utils/action-display';
-import { decodeHistoryAnswer, type AgentCitation } from '@/utils/react-agent-final';
+import { decodeHistoryAnswer, type AgentCitation, type TaskResult } from '@/utils/react-agent-final';
 import {
   LinkOutlined,
   PauseCircleOutlined,
@@ -58,6 +58,7 @@ interface RawPayload {
   /** v2 only: display-safe input file snapshots (share payloads use display_key). */
   input_files?: unknown;
   citations?: AgentCitation[];
+  task_result?: unknown;
 }
 
 interface _ParsedMessage {
@@ -75,6 +76,7 @@ interface ReplayRound {
   stepThoughts: Record<string, string>;
   finalContent: string;
   citations: AgentCitation[];
+  taskResult?: TaskResult;
   artifacts: ArtifactItem[];
   /** Read-only v2 input_files snapshots (share payloads key them by display_key). */
   attachedFiles: readonly SessionFileSnapshot[];
@@ -256,6 +258,7 @@ function buildReplayRounds(rawMessages: Array<{ role: string; context: string; o
         stepThoughts,
         finalContent: finalAnswer.content,
         citations: finalAnswer.citations,
+        taskResult: finalAnswer.taskResult,
         artifacts,
         attachedFiles: displayOnlySnapshots(payload.input_files),
       });
@@ -777,6 +780,7 @@ const SharePage: NextPage = () => {
 
               return (
                 <ManusLeftPanel
+                  taskResult={data.showFinal ? data.round.taskResult : undefined}
                   key={ri}
                   sections={data.sections}
                   activeStepId={isCurrentRound ? data.activeStepId : undefined}

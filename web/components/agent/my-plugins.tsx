@@ -22,7 +22,7 @@ function MyPlugins() {
   } = useRequest(async () => {
     const [err, res] = await apiInterceptors(postAgentMy());
     setIsError(!!err);
-    return res ?? [];
+    return res?.items ?? [];
   });
 
   const uninstall = async (name: string, index: number) => {

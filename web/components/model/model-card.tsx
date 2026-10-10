@@ -30,6 +30,7 @@ function ModelCard({ info }: Props) {
         model: info.model_name,
         worker_type: info.worker_type,
         params: {},
+        delete_after: false,
       }),
     );
     setLoading(false);

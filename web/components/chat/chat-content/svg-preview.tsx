@@ -6,7 +6,7 @@ import {
   ZoomInOutlined,
   ZoomOutOutlined,
 } from '@ant-design/icons';
-import { Button, Modal, Slider, Space, Tabs } from 'antd';
+import { Button, Modal, Slider, Space, Tabs, message } from 'antd';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CodePreview } from './code-preview';
@@ -17,14 +17,14 @@ import { CodePreview } from './code-preview';
  * @param {string} props.code SVG code content
  * @param {string} props.language Code language, default is svg
  */
-const SvgPreview = ({ code, language = 'svg' }) => {
+const SvgPreview = ({ code, language = 'svg' }: { code: string; language?: string }) => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [zoom, setZoom] = useState(100);
   const { t } = useTranslation();
 
   // Clean up SVG code (remove XML declaration, etc.)
-  const cleanSvgCode = svgCode => {
+  const cleanSvgCode = (svgCode: string) => {
     // Remove XML declaration
     let cleaned = svgCode.replace(/<\?xml[^>]*\?>/g, '');
 
@@ -124,6 +124,10 @@ const SvgPreview = ({ code, language = 'svg' }) => {
     // Create a canvas
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      message.error(t('svg_export_unavailable'));
+      return;
+    }
 
     // Create an image element
     const img = new Image();
@@ -160,7 +164,7 @@ const SvgPreview = ({ code, language = 'svg' }) => {
   };
 
   // Control zoom
-  const handleZoomChange = value => {
+  const handleZoomChange = (value: number) => {
     setZoom(value);
   };
 

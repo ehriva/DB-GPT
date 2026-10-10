@@ -45,7 +45,7 @@ export type SupportModel = {
   enabled: boolean;
   host: string;
   port: number;
-  params: ConfigurableParams;
+  params: ConfigurableParams[];
   provider: string;
   description: string;
 };

@@ -239,7 +239,7 @@ const ResourcesCardV2: React.FC<{
               <Popconfirm
                 title={t('want_delete')}
                 onConfirm={e => {
-                  remove(e, item);
+                  if (e) remove(e, item);
                 }}
                 onCancel={e => e?.stopPropagation()}
               >

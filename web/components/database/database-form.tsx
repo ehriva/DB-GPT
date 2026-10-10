@@ -78,17 +78,13 @@ function DatabaseForm({
       const { description, type, ...values } = formValues;
 
       const data = {
+        ...(editValue ? { id: editValue } : {}),
         type: selectedType,
         params: values,
         description: description || '',
       };
 
-      // If in edit mode, add id
-      if (editValue) {
-        data.id = editValue;
-      }
 
-      console.log('Form submitted:', data);
 
       const [testErr] = await apiInterceptors(postDbTestConnect(data));
       if (testErr) return;

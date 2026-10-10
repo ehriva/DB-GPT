@@ -19,6 +19,50 @@ export interface AgentCitation {
 export interface AgentFinalAnswer {
   content: string;
   citations: AgentCitation[];
+  taskResult?: TaskResult;
+}
+
+export interface TaskResult {
+  status: 'succeeded' | 'incomplete' | 'failed' | 'cancelled';
+  reason: string;
+  missing: string[];
+  warnings?: DataWarning[];
+}
+
+export interface DataWarning {
+  metric: string;
+  reason: string;
+  message: string;
+  affected_rows: number;
+}
+
+export function decodeTaskResult(value: unknown): TaskResult | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = value.status;
+  if (status !== 'succeeded' && status !== 'incomplete' && status !== 'failed' && status !== 'cancelled') {
+    return undefined;
+  }
+  if (typeof value.reason !== 'string') return undefined;
+  const warnings: DataWarning[] = [];
+  if (Array.isArray(value.warnings)) {
+    for (const item of value.warnings) {
+      if (isRecord(item) && typeof item.metric === 'string' && typeof item.reason === 'string'
+        && typeof item.message === 'string' && typeof item.affected_rows === 'number'
+        && Number.isInteger(item.affected_rows) && item.affected_rows >= 0) {
+        warnings.push({ metric: item.metric, reason: item.reason, message: item.message,
+          affected_rows: item.affected_rows });
+      }
+    }
+  }
+  return { status, reason: value.reason, missing: Array.isArray(value.missing)
+    ? value.missing.filter((item): item is string => typeof item === 'string') : [], warnings };
+}
+
+export function taskResultLabel(result?: TaskResult) {
+  if (result?.status === 'succeeded' && result.warnings?.length) return 'analysis_completed_with_warnings';
+  const labels = { succeeded: 'task_completed', incomplete: 'task_incomplete',
+    failed: 'task_failed', cancelled: 'task_cancelled' } as const;
+  return result ? labels[result.status] : 'task_unverified';
 }
 
 const MAX_CITATIONS = 10;
@@ -268,10 +312,12 @@ export function decodeFinalEvent(payload: unknown): AgentFinalAnswer {
   const rawContent = typeof payload === 'string' ? payload : typeof record?.content === 'string' ? record.content : '';
   const legacy = splitLegacyReferences(rawContent);
   const structured = normalizeStructuredCitations(record?.citations);
+  const taskResult = decodeTaskResult(record?.task_result);
 
   return {
     content: legacy.content,
     citations: structured.length > 0 ? structured : legacy.citations,
+    ...(taskResult ? { taskResult } : {}),
   };
 }
 
@@ -296,6 +342,7 @@ export function decodeHistoryAnswer(payload: unknown): AgentFinalAnswer {
   return decodeFinalEvent({
     content: typeof value.final_content === 'string' ? value.final_content : value.content,
     citations: value.citations,
+    task_result: value.task_result,
   });
 }
 

@@ -1,6 +1,7 @@
 import { AttachmentMessageCards, type SessionFileSnapshot } from '@/modules/session-files';
 import MarkdownContext from '@/new-components/common/MarkdownContext';
 import { AttachedConnector } from '@/new-components/connector/types';
+import { taskResultLabel, type TaskResult } from '@/utils/react-agent-final';
 import {
   ApartmentOutlined,
   ApiOutlined,
@@ -89,6 +90,7 @@ export interface ThinkingSection {
 }
 
 export interface ArtifactItem {
+  stepId?: string;
   id: string;
   type: 'file' | 'table' | 'chart' | 'image' | 'code' | 'markdown' | 'summary' | 'html';
   name: string;
@@ -105,6 +107,7 @@ export interface ManusLeftPanelProps {
   activeStepId?: string | null;
   onStepClick?: (stepId: string, sectionId: string) => void;
   isWorking?: boolean;
+  taskResult?: TaskResult;
   userQuery?: string;
   assistantText?: string;
   /** Render incremental answer text without reparsing Markdown on every frame. */
@@ -126,7 +129,7 @@ export interface ManusLeftPanelProps {
    */
   attachedFiles?: readonly SessionFileSnapshot[];
   attachedKnowledge?: {
-    id: number;
+    id: string | number;
     name: string;
     vector_type: string;
     desc?: string;
@@ -947,7 +950,7 @@ const SectionBlock: React.FC<{
   onStepClick: (stepId: string) => void;
   defaultExpanded?: boolean;
   stepThoughts?: Record<string, string>;
-}> = memo(({ section, activeStepId, onStepClick, defaultExpanded = true, stepThoughts }) => {
+}> = memo(({ section, activeStepId, onStepClick, defaultExpanded = false, stepThoughts }) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   const completedCount = section.steps.filter(s => s.status === 'completed').length;
@@ -1038,6 +1041,7 @@ const ManusLeftPanel: React.FC<ManusLeftPanelProps> = ({
   activeStepId,
   onStepClick,
   isWorking,
+  taskResult,
   userQuery,
   assistantText,
   isAssistantStreaming = false,
@@ -1181,18 +1185,17 @@ const ManusLeftPanel: React.FC<ManusLeftPanelProps> = ({
 
         {sections.length > 0 ? (
           <div className='pt-1'>
-            {sections.map((section, index) => (
+            {sections.map(section => (
               <SectionBlock
                 key={section.id}
                 section={section}
                 activeStepId={activeStepId}
                 onStepClick={stepId => handleStepClick(stepId, section.id)}
-                defaultExpanded={index === sections.length - 1}
                 stepThoughts={stepThoughts}
               />
             ))}
           </div>
-        ) : (
+        ) : isWorking || (!taskResult && !assistantText) ? (
           <div className='px-4 py-6 text-gray-400 space-y-2'>
             {isWorking ? (
               <div className='flex items-center gap-2'>
@@ -1206,7 +1209,7 @@ const ManusLeftPanel: React.FC<ManusLeftPanelProps> = ({
               <ThoughtBubble text={stepThoughts[activeStepId || 'initial']} />
             )}
           </div>
-        )}
+        ) : null}
 
         {isWorking && sections.length > 0 && (
           <div className='px-4 py-3 mt-2 rounded-lg bg-blue-50/50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 space-y-2'>
@@ -1291,10 +1294,30 @@ const ManusLeftPanel: React.FC<ManusLeftPanelProps> = ({
               )}
             </div>
 
-            <div className='flex items-center gap-1.5 mt-5'>
-              <CheckOutlined className='text-xs text-emerald-500' />
-              <span className='text-sm text-emerald-600 dark:text-emerald-400 font-medium'>{t('task_completed')}</span>
+          </div>
+        )}
+        {!isWorking && (assistantText || taskResult || (artifacts && artifacts.length > 0)) && (
+          <div className='mt-5 px-1 pb-4' role='status'>
+            <div className={classNames('flex items-center gap-1.5 text-sm font-medium', {
+              'text-emerald-600 dark:text-emerald-400': taskResult?.status === 'succeeded' && !taskResult.warnings?.length,
+              'text-amber-600 dark:text-amber-400': taskResult?.status !== 'succeeded' || !!taskResult.warnings?.length,
+            })}>
+              {taskResult?.status === 'succeeded' ? <CheckOutlined /> : <ExclamationCircleOutlined />}
+              <span>{t(taskResultLabel(taskResult))}</span>
             </div>
+            {taskResult?.missing.length ? (
+              <ul className='mt-2 pl-5 list-disc text-sm text-gray-500'>
+                {taskResult.missing.map(item => <li key={item}>{item}</li>)}
+              </ul>
+            ) : null}
+            {taskResult?.warnings?.length ? (
+              <details className='mt-2 text-sm text-amber-700 dark:text-amber-400'>
+                <summary>{t('data_warnings')}</summary>
+                <ul className='mt-2 pl-5 list-disc'>
+                  {taskResult.warnings.map(warning => <li key={`${warning.metric}:${warning.reason}`}>{warning.message}</li>)}
+                </ul>
+              </details>
+            ) : null}
           </div>
         )}
       </div>

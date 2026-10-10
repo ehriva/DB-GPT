@@ -214,7 +214,7 @@ const NodeHandler: React.FC<NodeHandlerProps> = ({ node, data, type, label, inde
     const ioArray = node[label];
     const dynamicFields = ioArray.filter(item => item.type_cls === data.type_cls && item.name.startsWith(data.name));
 
-    return index === ioArray.indexOf(dynamicFields[dynamicFields.length - 1]);
+    return index === ioArray.findIndex(item => item === dynamicFields[dynamicFields.length - 1]);
   };
 
   return (
