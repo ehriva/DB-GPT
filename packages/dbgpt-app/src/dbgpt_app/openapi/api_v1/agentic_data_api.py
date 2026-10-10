@@ -1091,11 +1091,27 @@ def _build_react_history_payload(
             "sub_agents": sub_agents,
             "input_files": input_files,
             "term_definitions": term_definitions or [],
-            **({"task_requirements": task_requirements} if task_requirements is not None else {}),
-            **({"resource_context": {"database": (
-                {"name": resource_context["database"]["name"], "type": resource_context["database"]["type"]}
-                if resource_context.get("database") else None
-            )}} if resource_context is not None else {}),
+            **(
+                {"task_requirements": task_requirements}
+                if task_requirements is not None
+                else {}
+            ),
+            **(
+                {
+                    "resource_context": {
+                        "database": (
+                            {
+                                "name": resource_context["database"]["name"],
+                                "type": resource_context["database"]["type"],
+                            }
+                            if resource_context.get("database")
+                            else None
+                        )
+                    }
+                }
+                if resource_context is not None
+                else {}
+            ),
             **({"task_result": task_result.to_dict()} if task_result else {}),
         },
         ensure_ascii=False,
@@ -1655,11 +1671,17 @@ async def _react_agent_stream_impl(
         "skill_prompt": None,
         "file_path": file_path,
         "term_datasource": database_name or "",
-        "resource_context": {"database": (
-            {"name": database_name, "type": dialogue.ext_info.get("database_type") or (
-                database_connector.dialect if database_connector else ""
-            )} if database_name else None
-        )},
+        "resource_context": {
+            "database": (
+                {
+                    "name": database_name,
+                    "type": dialogue.ext_info.get("database_type")
+                    or (database_connector.dialect if database_connector else ""),
+                }
+                if database_name
+                else None
+            )
+        },
         "original_user_input": user_input,
         "term_check_pending": tool_mode == "full",
         "term_explanation_only": explanation_only_request(user_input),
@@ -2392,7 +2414,9 @@ print(json.dumps(summary, ensure_ascii=False))
         llm_config = LLMConfig(llm_client=llm_client)
 
     term_clarifier = TermClarifier(
-        react_state, stream_callback, make_json_llm(llm_client, dialogue.model_name),
+        react_state,
+        stream_callback,
+        make_json_llm(llm_client, dialogue.model_name),
         database_connector=database_connector,
     )
     clarify_term_tool = make_clarify_term(term_clarifier)
@@ -2456,29 +2480,47 @@ print(json.dumps(summary, ensure_ascii=False))
                 if isinstance(_payload, dict):
                     _content = _payload.get("final_content") or ""
                     previous_resources = _payload.get("resource_context")
-                    previous_database = previous_resources.get("database") if isinstance(previous_resources, dict) else None
-                    react_state["previous_resource_context"] = {"database": (
-                        {"name": previous_database["name"], "type": previous_database["type"]}
-                        if isinstance(previous_database, dict) and isinstance(previous_database.get("name"), str)
-                        and isinstance(previous_database.get("type"), str) else None
-                    )}
+                    previous_database = (
+                        previous_resources.get("database")
+                        if isinstance(previous_resources, dict)
+                        else None
+                    )
+                    react_state["previous_resource_context"] = {
+                        "database": (
+                            {
+                                "name": previous_database["name"],
+                                "type": previous_database["type"],
+                            }
+                            if isinstance(previous_database, dict)
+                            and isinstance(previous_database.get("name"), str)
+                            and isinstance(previous_database.get("type"), str)
+                            else None
+                        )
+                    }
                     if isinstance(_payload.get("task_requirements"), dict):
                         react_state["task_requirements"] = _payload["task_requirements"]
                         react_state.pop("legacy_requirements_unresolved", None)
                     for previous_term in _payload.get("term_definitions", []):
                         if previous_term.get("datasource", "") == (database_name or ""):
                             confirmed = react_state.setdefault("confirmed_terms", [])
-                            confirmed[:] = [t for t in confirmed if t["term"] != previous_term["term"]]
+                            confirmed[:] = [
+                                t
+                                for t in confirmed
+                                if t["term"] != previous_term["term"]
+                            ]
                             confirmed.append(previous_term)
                     if not isinstance(_payload.get("task_requirements"), dict):
                         react_state["task_requirements"] = requirements_from_input(
                             react_state.get("previous_user_input", ""),
-                            react_state.get("confirmed_terms", []), database_name or "",
+                            react_state.get("confirmed_terms", []),
+                            database_name or "",
                         )
-                        react_state["legacy_requirements_unresolved"] = (
-                            not react_state["task_requirements"]["ratios"] and bool(legacy_ratio_names(
+                        react_state["legacy_requirements_unresolved"] = not react_state[
+                            "task_requirements"
+                        ]["ratios"] and bool(
+                            legacy_ratio_names(
                                 react_state.get("previous_user_input", "")
-                            ))
+                            )
                         )
             except Exception:
                 pass
@@ -3092,7 +3134,8 @@ Thought/Action/Action Input format shown above.
     # Convert workflow_prompt to PromptTemplate so it is used as system prompt
     # Use jinja2 format to avoid issues with JSON braces { } in the prompt
     workflow_prompt_template = PromptTemplate(
-        template=workflow_prompt + """
+        template=workflow_prompt
+        + """
 
 ## Delivery and execution
 There is no fixed step count or total-duration deadline for this main task.
@@ -3178,19 +3221,30 @@ skills or when the available database facts already suffice for the request.
                 try:
                     business_context = ""
                     if knowledge_resources:
-                        retrieve_terms = make_knowledge_retrieve(react_state, knowledge_resources)
+                        retrieve_terms = make_knowledge_retrieve(
+                            react_state, knowledge_resources
+                        )
                         business_context = await retrieve_terms(user_input)
-                    ready = await term_clarifier.preflight(user_input, database_context, business_context)
+                    ready = await term_clarifier.preflight(
+                        user_input, database_context, business_context
+                    )
                 except Exception as error:
                     record_term_check_failure(react_state, error)
                     ready = False
                 if not ready:
                     return AgentMessage(
-                        content="必要名词未确认，任务未完成。", success=False,
-                        context={"termination_reason": react_state.get("term_stop_reason", "term_unresolved")},
+                        content="必要名词未确认，任务未完成。",
+                        success=False,
+                        context={
+                            "termination_reason": react_state.get(
+                                "term_stop_reason", "term_unresolved"
+                            )
+                        },
                     )
                 if react_state.get("confirmed_terms"):
-                    react_state["term_explanation_only"] = react_state["term_explanation_only"] and any(
+                    react_state["term_explanation_only"] = react_state[
+                        "term_explanation_only"
+                    ] and any(
                         contains_term(user_input, name)
                         for term in react_state["confirmed_terms"]
                         for name in [term["term"], *term.get("aliases", [])]
@@ -3198,8 +3252,8 @@ skills or when the available database facts already suffice for the request.
                     scope_note = (
                         "本次仅需说明名词含义，不做实际数据计算；计算口径未确认不妨碍解释，"
                         "不要额外要求确认公式。"
-                        if react_state["term_explanation_only"] else
-                        "按用户确认或上下文明确的定义和口径继续，并说明口径；不要因公式未人工确认重复问。仅发现新的实际冲突且上下文无法消除时，使用clarify_term，aspect设为formula并提供evidence。"
+                        if react_state["term_explanation_only"]
+                        else "按用户确认或上下文明确的定义和口径继续，并说明口径；不要因公式未人工确认重复问。仅发现新的实际冲突且上下文无法消除时，使用clarify_term，aspect设为formula并提供evidence。"
                     )
                     received.content = (
                         "以下名词已通过前置筛选，包含用户确认项和上下文明确自动采用项；adopted_by=context表示自动采用，不要宣称用户确认了它。"
@@ -3214,7 +3268,10 @@ skills or when the available database facts already suffice for the request.
                     )
                 await stream_callback("term.check.done", {})
                 requirements = react_state.get("task_requirements", {})
-                received.content += "\n\n当前任务交付要求（继续任务时已继承，不能因取消计划步骤删除）：\n" + json.dumps(requirements, ensure_ascii=False)
+                received.content += (
+                    "\n\n当前任务交付要求（继续任务时已继承，不能因取消计划步骤删除）：\n"
+                    + json.dumps(requirements, ensure_ascii=False)
+                )
                 if requirements.get("ratios"):
                     from .tools.query_quality import ratio_delivery_hint
 
@@ -3233,15 +3290,17 @@ skills or when the available database facts already suffice for the request.
                 await stream_callback("database.profile.start", {})
                 profile_result = json.loads(await database_profile_tool())
                 profile_text = "\n".join(
-                    str(chunk["content"])
-                    for chunk in profile_result.get("chunks", [])
+                    str(chunk["content"]) for chunk in profile_result.get("chunks", [])
                 )
                 workflow_prompt_template.template += (
-                    "\n## 已获取的真实数据库画像\n" + profile_text +
-                    "\n画像事实已由系统获取。直接据此生成所需报告，"
-                    "无需寻找连接、重复导出明细或加载无关技能。"
-                ) if profile_result.get("success") else (
-                    "\n## 数据库画像获取失败\n" + profile_text
+                    (
+                        "\n## 已获取的真实数据库画像\n"
+                        + profile_text
+                        + "\n画像事实已由系统获取。直接据此生成所需报告，"
+                        "无需寻找连接、重复导出明细或加载无关技能。"
+                    )
+                    if profile_result.get("success")
+                    else ("\n## 数据库画像获取失败\n" + profile_text)
                 )
                 await stream_callback("database.profile.result", profile_result)
             return await agent.generate_reply(
@@ -3267,9 +3326,11 @@ skills or when the available database facts already suffice for the request.
                 task_requirements=react_state.get("task_requirements"),
                 resource_context=react_state.get("resource_context"),
             )
-            _react_terminal_events(storage_conv, payload, AgentFinalAnswer(
-                content="任务已取消。", task_result=cancelled_result
-            ))
+            _react_terminal_events(
+                storage_conv,
+                payload,
+                AgentFinalAnswer(content="任务已取消。", task_result=cancelled_result),
+            )
             raise
 
     agent_task = asyncio.create_task(run_agent())
@@ -3345,14 +3406,19 @@ skills or when the available database facts already suffice for the request.
                 "database_profile", "获取表结构、字段类型和实际行数"
             )
             current_history_step = {
-                "id": profile_step_id, "title": "database_profile",
-                "action": "database_profile", "status": "running", "outputs": [],
+                "id": profile_step_id,
+                "title": "database_profile",
+                "action": "database_profile",
+                "status": "running",
+                "outputs": [],
             }
             yield profile_start
         elif event_type == "database.profile.result" and profile_step_id:
             profile_status = "done" if event.get("success") else "failed"
             for chunk in event.get("chunks", []):
-                yield step_chunk(profile_step_id, chunk["output_type"], chunk["content"])
+                yield step_chunk(
+                    profile_step_id, chunk["output_type"], chunk["content"]
+                )
             yield step_done(profile_step_id, profile_status)
             if current_history_step is not None:
                 current_history_step["outputs"] = event.get("chunks", [])
@@ -3362,8 +3428,14 @@ skills or when the available database facts already suffice for the request.
         elif event_type == "context.status":
             # Forward context-management status to frontend as-is.
             yield _sse_event(event)
-        elif event_type in ("question.asked", "question.replied", "question.rejected",
-                            "term.check.start", "term.check.done", "term.confirmed"):
+        elif event_type in (
+            "question.asked",
+            "question.replied",
+            "question.rejected",
+            "term.check.start",
+            "term.check.done",
+            "term.confirmed",
+        ):
             # Forward human-in-the-loop question events to frontend as-is.
             yield _sse_event(event)
         elif event_type in (
@@ -3860,7 +3932,11 @@ skills or when the available database facts already suffice for the request.
     if terms:
         final_content += "\n\n本次采用的名词解释：\n" + "\n".join(
             f"- {t['term']}：{t['definition']}；{term_scope_description(t, markdown=True)}"
-            + ("；来源：模型理解，未经资料核验" if t.get("source_type") == "model" else "")
+            + (
+                "；来源：模型理解，未经资料核验"
+                if t.get("source_type") == "model"
+                else ""
+            )
             + ("（已保存到共享术语库）" if t.get("saved") else "（仅本次使用）")
             + (f"；{t['save_error']}" if t.get("save_error") else "")
             for t in terms

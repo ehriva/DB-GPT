@@ -237,9 +237,7 @@ class DefaultModelWorker(ModelWorker):
                 is_first_generate,
             )
             last_metrics = current_metrics
-            logger.info(
-                "generate metrics: %s", last_metrics.to_printable_string()
-            )
+            logger.info("generate metrics: %s", last_metrics.to_printable_string())
             return model_output
         else:
             for out in self.generate_stream(params):
@@ -361,9 +359,7 @@ class DefaultModelWorker(ModelWorker):
                 is_first_generate,
             )
             last_metrics = current_metrics
-            logger.info(
-                "generate metrics: %s", last_metrics.to_printable_string()
-            )
+            logger.info("generate metrics: %s", last_metrics.to_printable_string())
             return model_output
         else:
             output = None

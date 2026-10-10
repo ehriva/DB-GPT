@@ -252,12 +252,15 @@ def _adoption_source(value):
 def explicitly_requires_values(text):
     from ..react_task import data_backfill_requested
 
-    return data_backfill_requested(text) or bool(re.search(
-        r"(?:必须|务必|一定要)[^。；;\n]{0,32}(?:完整数值|完整毛利额|完整毛利率)"
-        r"|(?:不接受|不允许)[^。；;\n]{0,12}(?:NULL|空值)"
-        r"|\bmust\b[^.;\n]{0,40}\b(?:complete|full)\s+(?:numeric(?:al)?\s+)?values\b",
-        text, re.I,
-    ))
+    return data_backfill_requested(text) or bool(
+        re.search(
+            r"(?:必须|务必|一定要)[^。；;\n]{0,32}(?:完整数值|完整毛利额|完整毛利率)"
+            r"|(?:不接受|不允许)[^。；;\n]{0,12}(?:NULL|空值)"
+            r"|\bmust\b[^.;\n]{0,40}\b(?:complete|full)\s+(?:numeric(?:al)?\s+)?values\b",
+            text,
+            re.I,
+        )
+    )
 
 
 def validate_request_scope(raw, text, previous, reconstruct=False):
@@ -267,28 +270,54 @@ def validate_request_scope(raw, text, previous, reconstruct=False):
     terms = normalize_model_items(raw["terms"])
     scope = raw["request_scope"]
     if not isinstance(scope, dict) or set(scope) != {
-        "action", "scope_evidence", "requirements"
+        "action",
+        "scope_evidence",
+        "requirements",
     }:
         raise ValueError("任务范围格式不正确。")
     action, evidence, updates = (
-        scope["action"], scope["scope_evidence"], scope["requirements"]
+        scope["action"],
+        scope["scope_evidence"],
+        scope["requirements"],
     )
     if action not in {"continue", "change", "new", "clarify"}:
         raise ValueError("任务范围action不正确。")
     if not isinstance(updates, dict):
         raise ValueError("任务要求包含未知字段。")
     body = re.sub(r"^\[Database:[^\]]+\]\s*", "", text)
-    only_continuation = bool(re.match(r"(?:继续原需求|继续原分析|继续上次|只改(?:报告)?排版|仅改(?:报告)?排版)", body))
-    explicit_delivery_change = bool(re.search(r"(?:取消|不要|不用).{0,8}报告|(?:改|变更|重新定义).{0,8}(?:公式|口径)|[=＝]", body))
-    if previous and only_continuation and not explicit_delivery_change and not reconstruct:
+    only_continuation = bool(
+        re.match(
+            r"(?:继续原需求|继续原分析|继续上次|只改(?:报告)?排版|仅改(?:报告)?排版)",
+            body,
+        )
+    )
+    explicit_delivery_change = bool(
+        re.search(
+            r"(?:取消|不要|不用).{0,8}报告|(?:改|变更|重新定义).{0,8}(?:公式|口径)|[=＝]",
+            body,
+        )
+    )
+    if (
+        previous
+        and only_continuation
+        and not explicit_delivery_change
+        and not reconstruct
+    ):
         action = "continue"
-        updates = {key: value for key, value in updates.items() if key == "analysis_scope"} if isinstance(updates, dict) else {}
+        updates = (
+            {key: value for key, value in updates.items() if key == "analysis_scope"}
+            if isinstance(updates, dict)
+            else {}
+        )
     if not isinstance(evidence, str) or (evidence and evidence not in text):
         raise ValueError("范围证据必须来自当前用户原文。")
     if action in {"change", "new"} and not evidence.strip():
         raise ValueError("改变范围必须提供当前用户证据。")
     if not isinstance(updates, dict) or set(updates) - {
-        "requires_report", "requires_database_profile", "ratios", "analysis_scope"
+        "requires_report",
+        "requires_database_profile",
+        "ratios",
+        "analysis_scope",
     }:
         raise ValueError("任务要求包含未知字段。")
     for key in ("requires_report", "requires_database_profile"):
@@ -300,7 +329,11 @@ def validate_request_scope(raw, text, previous, reconstruct=False):
         metrics = set()
         for ratio in updates["ratios"]:
             if not isinstance(ratio, dict) or set(ratio) != {
-                "metric", "numerator", "denominator", "unit", "unavailable_policy"
+                "metric",
+                "numerator",
+                "denominator",
+                "unit",
+                "unavailable_policy",
             }:
                 raise ValueError("比率要求格式不正确。")
             if any(not isinstance(v, str) or not v.strip() for v in ratio.values()):
@@ -312,7 +345,11 @@ def validate_request_scope(raw, text, previous, reconstruct=False):
             if ratio["metric"] in metrics:
                 raise ValueError("比率要求不能重复。")
             metrics.add(ratio["metric"])
-    if action in {"continue", "clarify"} and (set(updates) - {"analysis_scope"}) and not (reconstruct and action == "continue"):
+    if (
+        action in {"continue", "clarify"}
+        and (set(updates) - {"analysis_scope"})
+        and not (reconstruct and action == "continue")
+    ):
         raise ValueError("继续任务不能隐式删除或更改要求。")
     if reconstruct and action == "continue":
         for key in ("requires_report", "requires_database_profile"):
@@ -324,15 +361,34 @@ def validate_request_scope(raw, text, previous, reconstruct=False):
     requirements.setdefault("requires_database_profile", False)
     requirements.setdefault("ratios", [])
     if (action in {"new", "change"} or reconstruct) and "ratios" in updates:
-        explicit_percent = bool(re.search(r"(?:列|计算值|结构化结果|单位|\bcolumn\b|\bunit\b).*?(?:百分数|percent)", text, re.I))
+        explicit_percent = bool(
+            re.search(
+                r"(?:列|计算值|结构化结果|单位|\bcolumn\b|\bunit\b).*?(?:百分数|percent)",
+                text,
+                re.I,
+            )
+        )
         for ratio in requirements["ratios"]:
-            ratio["unit"] = "percent" if ratio["metric"].endswith(("百分比", "_percent", "%")) or explicit_percent else "fraction"
+            ratio["unit"] = (
+                "percent"
+                if ratio["metric"].endswith(("百分比", "_percent", "%"))
+                or explicit_percent
+                else "fraction"
+            )
     if explicitly_requires_values(text):
         for ratio in requirements["ratios"]:
             ratio["unavailable_policy"] = "require_value"
-    if action == "new" and not any(word in text.casefold() for word in (
-        "数据库画像", "database profile", "表结构", "table structure", "schema", "字段类型",
-    )):
+    if action == "new" and not any(
+        word in text.casefold()
+        for word in (
+            "数据库画像",
+            "database profile",
+            "表结构",
+            "table structure",
+            "schema",
+            "字段类型",
+        )
+    ):
         requirements["requires_database_profile"] = False
     apply_cost_contract(requirements, text)
     return terms, action, requirements
@@ -341,30 +397,37 @@ def validate_request_scope(raw, text, previous, reconstruct=False):
 def apply_cost_contract(requirements, text, confirmed=()):
     """Bind ERP complete-input ratios to the adopted human cost definition."""
     complete = "成本完整子集" in text
-    dual_population = "毛利率" in text and bool(re.search(
-        r"全量[^。；;\n]{0,16}(?:与|和|及)[^。；;\n]{0,12}成本完整子集"
-        r"|成本完整子集[^。；;\n]{0,16}(?:与|和|及)[^。；;\n]{0,12}全量",
-        text,
-    ))
+    dual_population = "毛利率" in text and bool(
+        re.search(
+            r"全量[^。；;\n]{0,16}(?:与|和|及)[^。；;\n]{0,12}成本完整子集"
+            r"|成本完整子集[^。；;\n]{0,16}(?:与|和|及)[^。；;\n]{0,12}全量",
+            text,
+        )
+    )
     if dual_population:
         ratios = requirements.setdefault("ratios", [])
         margins = [r for r in ratios if "毛利" in r["metric"]]
         for subset in (False, True):
-            if any(any(w in r["metric"] for w in ("子集", "局部")) == subset for r in margins):
+            if any(
+                any(w in r["metric"] for w in ("子集", "局部")) == subset
+                for r in margins
+            ):
                 continue
             suffix = "（成本完整子集）" if subset else "（全量）"
-            ratios.append({
-                "metric": "毛利率" + suffix,
-                "numerator": "毛利额" + suffix,
-                "denominator": "销售额" + suffix,
-                "unit": margins[0].get("unit", "fraction") if margins else "fraction",
-                "unavailable_policy": "require_value" if explicitly_requires_values(text) else "explain",
-            })
-    if (
-        not complete
-        and "材料" not in text
-        and not requirements.get("analysis_scope")
-    ):
+            ratios.append(
+                {
+                    "metric": "毛利率" + suffix,
+                    "numerator": "毛利额" + suffix,
+                    "denominator": "销售额" + suffix,
+                    "unit": margins[0].get("unit", "fraction")
+                    if margins
+                    else "fraction",
+                    "unavailable_policy": "require_value"
+                    if explicitly_requires_values(text)
+                    else "explain",
+                }
+            )
+    if not complete and "材料" not in text and not requirements.get("analysis_scope"):
         return
     material_only = bool(
         re.search(r"(?:仅|只)(?:计算|分析|考虑|扣除)?材料(?:成本)?", text)
@@ -388,12 +451,19 @@ def apply_cost_contract(requirements, text, confirmed=()):
         expression = re.search(r"(?:毛利额|成本)\s*[=＝]\s*([^。；;\n]+)", formula)
         expression = expression.group(1) if expression else formula
         expression = re.sub(r"\s+", "", expression).replace("销售额", "销售金额")
-        if expression in {"销售金额-销售数量*(材料成本单价+工费)", "销售数量*(材料成本单价+工费)"}:
+        if expression in {
+            "销售金额-销售数量*(材料成本单价+工费)",
+            "销售数量*(材料成本单价+工费)",
+        }:
             basis = "standard"
         elif expression in {"销售金额-销售数量*材料成本单价", "销售数量*材料成本单价"}:
             basis = "material_only"
         else:
-            custom_inputs = [field for field in ("材料成本单价", "工费", "销售数量", "销售金额") if field in expression]
+            custom_inputs = [
+                field
+                for field in ("材料成本单价", "工费", "销售数量", "销售金额")
+                if field in expression
+            ]
             if not custom_inputs:
                 return
             basis = "custom"
@@ -418,7 +488,14 @@ def apply_cost_contract(requirements, text, confirmed=()):
                 ratio[name] = re.sub(
                     r"[（(]仅材料成本[）)]|仅材料成本", "", ratio[name]
                 )
-        if not explicit_formula and not adopted and any(re.search(r"\b(?:SUM|SELECT|WHERE|CASE|AVG|COUNT)\b", ratio[name], re.I) for name in ("numerator", "denominator")):
+        if (
+            not explicit_formula
+            and not adopted
+            and any(
+                re.search(r"\b(?:SUM|SELECT|WHERE|CASE|AVG|COUNT)\b", ratio[name], re.I)
+                for name in ("numerator", "denominator")
+            )
+        ):
             prefix = re.sub(r"毛利率(?:百分比)?$", "", ratio["metric"])
             ratio["numerator"] = prefix + "毛利额"
             ratio["denominator"] = prefix + "销售额"
@@ -446,7 +523,9 @@ def requirements_from_input(text, confirmed, datasource=""):
             continue
         if not contains_term(text, term["term"]):
             continue
-        if not (term.get("formula_confirmed") or term.get("clarification_required") is False):
+        if not (
+            term.get("formula_confirmed") or term.get("clarification_required") is False
+        ):
             continue
         formula = re.fullmatch(r"\s*([\w]+)\s*/\s*([\w]+)\s*", term.get("formula", ""))
         if formula:
@@ -455,18 +534,31 @@ def requirements_from_input(text, confirmed, datasource=""):
     for label, num, den in formulas:
         label = re.sub(r"^(?:我定义|定义)(?=\w+)", "", label)
         ratios[label] = {
-            "metric": label, "numerator": num, "denominator": den,
-            "unit": "fraction", "unavailable_policy": policy,
+            "metric": label,
+            "numerator": num,
+            "denominator": den,
+            "unit": "fraction",
+            "unavailable_policy": policy,
         }
     return {
-        "requires_report": report, "requires_database_profile": profile,
+        "requires_report": report,
+        "requires_database_profile": profile,
         "ratios": list(ratios.values()),
     }
 
 
 def legacy_ratio_names(text):
-    names = re.findall(r"[\u4e00-\u9fff]*率|(?<![A-Za-z0-9_])ROI(?![A-Za-z0-9_])|平均销售单价", text, re.I)
-    return list(dict.fromkeys(re.sub(r"^(?:请|帮我|分析|计算|输出|查询|展示|统计|及|和)+", "", name) for name in names))
+    names = re.findall(
+        r"[\u4e00-\u9fff]*率|(?<![A-Za-z0-9_])ROI(?![A-Za-z0-9_])|平均销售单价",
+        text,
+        re.I,
+    )
+    return list(
+        dict.fromkeys(
+            re.sub(r"^(?:请|帮我|分析|计算|输出|查询|展示|统计|及|和)+", "", name)
+            for name in names
+        )
+    )
 
 
 class TermClarifier:
@@ -600,12 +692,17 @@ class TermClarifier:
             raise ValueError("待解释名词为空或过长。")
         if aspect not in {"meaning", "formula"}:
             raise ValueError("aspect只能是meaning或formula。")
-        snapshots = [s for s in self.state.get("validated_results", {}).values()
-                     if s.get("conv_id") == self.state.get("conv_id")
-                     and s.get("database") == self.state.get("term_datasource", "")]
+        snapshots = [
+            s
+            for s in self.state.get("validated_results", {}).values()
+            if s.get("conv_id") == self.state.get("conv_id")
+            and s.get("database") == self.state.get("term_datasource", "")
+        ]
         sales_products = None
         for snapshot in reversed(snapshots):
-            if snapshot.get("sales_source") and "产品编码" in snapshot.get("columns", []):
+            if snapshot.get("sales_source") and "产品编码" in snapshot.get(
+                "columns", []
+            ):
                 index = snapshot["columns"].index("产品编码")
                 sales_products = {str(row[index]) for row in snapshot["rows"]}
                 break
@@ -613,10 +710,20 @@ class TermClarifier:
             for snapshot in snapshots:
                 for conflict in snapshot.get("price_conflicts", []):
                     product = str(conflict.get("keys", {}).get("产品编码", ""))
-                    if (product and product in term and product not in sales_products
-                            and product not in self.state.get("original_user_input", "")):
-                        return {"term": term, "definition": "该价格冲突不涉及本轮已查询销售范围。",
-                                "scope_note": "已核对源销售范围，无此产品，不中断当前分析；继续当前范围的指标与报告。"}
+                    if (
+                        product
+                        and product in term
+                        and product not in sales_products
+                        and product not in self.state.get("original_user_input", "")
+                    ):
+                        return {
+                            "term": term,
+                            "definition": "该价格冲突不涉及本轮已查询销售范围。",
+                            "scope_note": (
+                                "已核对源销售范围，无此产品，不中断当前分析；"
+                                "继续当前范围的指标与报告。"
+                            ),
+                        }
         adopted = next(
             (
                 t
@@ -832,31 +939,56 @@ class TermClarifier:
                     "saved_candidates": matching,
                     "previous_task_requirements": self.state.get("task_requirements"),
                     "database": self.state.get("resource_context", {}).get("database"),
-                    "previous_database": self.state.get("previous_resource_context", {}).get("database"),
+                    "previous_database": self.state.get(
+                        "previous_resource_context", {}
+                    ).get("database"),
                     "previous_request": self.state.get("previous_user_input", ""),
-                    "legacy_requirements_unresolved": self.state.get("legacy_requirements_unresolved", False),
+                    "legacy_requirements_unresolved": self.state.get(
+                        "legacy_requirements_unresolved", False
+                    ),
                 },
                 ensure_ascii=False,
             )
         )
         self.state["term_check_stage"] = "model_format"
         raw, scope_action, requirements = validate_request_scope(
-            raw, text, self.state.get("task_requirements"),
+            raw,
+            text,
+            self.state.get("task_requirements"),
             reconstruct=self.state.get("legacy_requirements_unresolved", False),
         )
         if "成本完整子集" in text and not re.search(r"(?:仅|只).*材料", text):
             for item in raw:
-                if any(w in item.get("term", "") for w in ("毛利", "成本完整子集")) and any(w in item.get("definition", "") for w in ("仅材料", "只扣材料")):
-                    item["definition"] = "同一成本口径的必需输入全部齐全的销售行子集；不减少成本项。"
-                    item["formula"] = "子集毛利额/子集销售额" if "率" in item.get("term", "") else "沿用本次成本口径，全部必需输入非NULL"
+                if any(
+                    w in item.get("term", "") for w in ("毛利", "成本完整子集")
+                ) and any(
+                    w in item.get("definition", "") for w in ("仅材料", "只扣材料")
+                ):
+                    item["definition"] = (
+                        "同一成本口径的必需输入全部齐全的销售行子集；不减少成本项。"
+                    )
+                    item["formula"] = (
+                        "子集毛利额/子集销售额"
+                        if "率" in item.get("term", "")
+                        else "沿用本次成本口径，全部必需输入非NULL"
+                    )
         if scope_action == "clarify":
-            question = {"header": "任务范围", "question": "这次是继续原分析还是开始新任务？",
-                        "options": [{"label": "继续原分析"}, {"label": "开始新任务"}],
-                        "multiple": False, "custom": False}
+            question = {
+                "header": "任务范围",
+                "question": "这次是继续原分析还是开始新任务？",
+                "options": [{"label": "继续原分析"}, {"label": "开始新任务"}],
+                "multiple": False,
+                "custom": False,
+            }
             pq = question_manager.create(self.state["conv_id"], [question])
-            await self.callback("question.asked", {
-                "request_id": pq.request_id, "conv_id": pq.conv_id, "questions": [question],
-            })
+            await self.callback(
+                "question.asked",
+                {
+                    "request_id": pq.request_id,
+                    "conv_id": pq.conv_id,
+                    "questions": [question],
+                },
+            )
             try:
                 await asyncio.wait_for(pq.event.wait(), self.timeout)
                 if pq.rejected:
@@ -864,7 +996,9 @@ class TermClarifier:
                     return False
                 await self.callback("question.replied", {"request_id": pq.request_id})
                 if pq.answers[0][0] == "开始新任务":
-                    requirements = requirements_from_input(text, confirmed, self.state.get("term_datasource", ""))
+                    requirements = requirements_from_input(
+                        text, confirmed, self.state.get("term_datasource", "")
+                    )
                     scope_action = "new"
                 elif pq.answers[0][0] != "继续原分析":
                     self.state["term_stop_reason"] = "term_unresolved"
@@ -877,16 +1011,25 @@ class TermClarifier:
             finally:
                 question_manager.remove(pq.request_id)
                 if not pq.answers:
-                    await self.callback("question.rejected", {"request_id": pq.request_id})
+                    await self.callback(
+                        "question.rejected", {"request_id": pq.request_id}
+                    )
         identified = {}
         assessed = set()
         explicit_selection = re.search(
             r"让我选择|先.*确认.*(?:含义|解释)|选择.*(?:含义|解释)", text
         )
-        reconstruct = self.state.get("legacy_requirements_unresolved") and scope_action == "continue"
-        assessment_text = text + ("\n" + self.state.get("previous_user_input", "") if reconstruct else "")
+        reconstruct = (
+            self.state.get("legacy_requirements_unresolved")
+            and scope_action == "continue"
+        )
+        assessment_text = text + (
+            "\n" + self.state.get("previous_user_input", "") if reconstruct else ""
+        )
         if scope_action in {"continue", "change"}:
-            assessment_text += "\n" + "\n".join(r["metric"] for r in requirements["ratios"])
+            assessment_text += "\n" + "\n".join(
+                r["metric"] for r in requirements["ratios"]
+            )
         for item in raw:
             term = item.get("term", "").strip()
             if not term or not contains_term(assessment_text, term):
@@ -976,11 +1119,23 @@ class TermClarifier:
                 identified[term] = item
         grouped = {}
         if reconstruct and not requirements["ratios"]:
-            restored = requirements_from_input(self.state.get("previous_user_input", ""), confirmed, self.state.get("term_datasource", ""))
+            restored = requirements_from_input(
+                self.state.get("previous_user_input", ""),
+                confirmed,
+                self.state.get("term_datasource", ""),
+            )
             requirements["ratios"] = restored["ratios"]
         if reconstruct and not requirements["ratios"]:
             for metric in legacy_ratio_names(self.state.get("previous_user_input", "")):
-                identified.setdefault(metric, {"reason": "旧历史未保存可证明的计算口径，请明确本次定义和口径；不能把原指标要求当成不存在。"})
+                identified.setdefault(
+                    metric,
+                    {
+                        "reason": (
+                            "旧历史未保存可证明的计算口径，请明确本次定义和口径；"
+                            "不能把原指标要求当成不存在。"
+                        )
+                    },
+                )
         for record in matching:
             used_name = next(
                 name
@@ -1015,24 +1170,51 @@ class TermClarifier:
         for ratio in requirements["ratios"]:
             for snapshot in confirmed:
                 if normalize_term(snapshot["term"]) == normalize_term(ratio["metric"]):
-                    current = re.search(re.escape(ratio["metric"]) + r"\s*[=＝]\s*([\w]+)\s*/\s*([\w]+)", text)
-                    human_formula = re.fullmatch(r"\s*([\w]+)\s*/\s*([\w]+)\s*", snapshot.get("formula", ""))
+                    current = re.search(
+                        re.escape(ratio["metric"])
+                        + r"\s*[=＝]\s*([\w]+)\s*/\s*([\w]+)",
+                        text,
+                    )
+                    human_formula = re.fullmatch(
+                        r"\s*([\w]+)\s*/\s*([\w]+)\s*", snapshot.get("formula", "")
+                    )
                     if current:
                         ratio["numerator"], ratio["denominator"] = current.groups()
-                        snapshot["formula"] = ratio["numerator"] + "/" + ratio["denominator"]
+                        snapshot["formula"] = (
+                            ratio["numerator"] + "/" + ratio["denominator"]
+                        )
                         snapshot["adopted_by"] = "user"
-                    elif human_formula and (snapshot.get("formula_confirmed") or snapshot.get("saved")):
-                        ratio["numerator"], ratio["denominator"] = human_formula.groups()
-                    elif not snapshot.get("formula_confirmed") and not snapshot.get("saved"):
-                        snapshot["formula"] = ratio["numerator"] + "/" + ratio["denominator"]
-        if self.database_connector is not None and not self.state.get("term_explanation_only"):
-            from ..tools.sql_query import resolve_analysis_scope
-
-            previous_scope = self.state.get("task_requirements", {}).get("analysis_scope") if scope_action != "new" else None
-            if scope_action != "new" and not previous_scope and self.state.get("previous_user_input"):
+                    elif human_formula and (
+                        snapshot.get("formula_confirmed") or snapshot.get("saved")
+                    ):
+                        ratio["numerator"], ratio["denominator"] = (
+                            human_formula.groups()
+                        )
+                    elif not snapshot.get("formula_confirmed") and not snapshot.get(
+                        "saved"
+                    ):
+                        snapshot["formula"] = (
+                            ratio["numerator"] + "/" + ratio["denominator"]
+                        )
+        if self.database_connector is not None and not self.state.get(
+            "term_explanation_only"
+        ):
+            previous_scope = (
+                self.state.get("task_requirements", {}).get("analysis_scope")
+                if scope_action != "new"
+                else None
+            )
+            if (
+                scope_action != "new"
+                and not previous_scope
+                and self.state.get("previous_user_input")
+            ):
                 restored_scope = {}
-                await self.resolve_scope(restored_scope,
-                    self.state["previous_user_input"], self.state.get("resource_context", {}).get("database"))
+                await self.resolve_scope(
+                    restored_scope,
+                    self.state["previous_user_input"],
+                    self.state.get("resource_context", {}).get("database"),
+                )
                 previous_scope = restored_scope.get("analysis_scope")
             await self.resolve_scope(
                 requirements,
@@ -1042,9 +1224,20 @@ class TermClarifier:
             )
         apply_cost_contract(requirements, assessment_text, confirmed)
         for snapshot in confirmed:
-            if snapshot.get("saved") or snapshot.get("formula_confirmed") or snapshot.get("adopted_by") != "context":
+            if (
+                snapshot.get("saved")
+                or snapshot.get("formula_confirmed")
+                or snapshot.get("adopted_by") != "context"
+            ):
                 continue
-            contract = next((r for r in requirements["ratios"] if normalize_term(r["metric"]) == normalize_term(snapshot["term"])), None)
+            contract = next(
+                (
+                    r
+                    for r in requirements["ratios"]
+                    if normalize_term(r["metric"]) == normalize_term(snapshot["term"])
+                ),
+                None,
+            )
             if contract:
                 numerator, denominator = contract["numerator"], contract["denominator"]
                 if re.search(r"[+*/-]", numerator):
@@ -1053,9 +1246,20 @@ class TermClarifier:
                     denominator = "(" + denominator + ")"
                 snapshot["formula"] = numerator + "/" + denominator
             if "成本完整子集" in snapshot["term"]:
-                inputs = list(dict.fromkeys(c for r in requirements["ratios"] if r.get("population") == "complete_inputs" for c in r.get("required_inputs", [])))
+                inputs = list(
+                    dict.fromkeys(
+                        c
+                        for r in requirements["ratios"]
+                        if r.get("population") == "complete_inputs"
+                        for c in r.get("required_inputs", [])
+                    )
+                )
                 if inputs:
-                    snapshot["definition"] = "沿用已采用成本口径，仅包含必需输入" + "、".join(inputs) + "全部非NULL的销售行；分子分母使用同一完整行集合。"
+                    snapshot["definition"] = (
+                        "沿用已采用成本口径，仅包含必需输入"
+                        + "、".join(inputs)
+                        + "全部非NULL的销售行；分子分母使用同一完整行集合。"
+                    )
         self.state["confirmed_terms"] = confirmed
         self.state["task_requirements"] = requirements
         for key in ("requires_report", "requires_database_profile"):
@@ -1073,7 +1277,11 @@ class TermClarifier:
             ):
                 return False
         if reconstruct and not requirements["ratios"]:
-            restored = requirements_from_input(self.state.get("previous_user_input", ""), self.state["confirmed_terms"], self.state.get("term_datasource", ""))
+            restored = requirements_from_input(
+                self.state.get("previous_user_input", ""),
+                self.state["confirmed_terms"],
+                self.state.get("term_datasource", ""),
+            )
             if not restored["ratios"]:
                 self.state["unresolved_terms"] = list(identified)
                 self.state["term_stop_reason"] = "term_formula_unconfirmed"
@@ -1088,14 +1296,28 @@ class TermClarifier:
 
         while True:
             try:
-                await resolve_analysis_scope(self.database_connector, requirements, text, database, previous)
+                await resolve_analysis_scope(
+                    self.database_connector, requirements, text, database, previous
+                )
                 return
             except AnalysisScopeChoice as choice:
-                question = {"kind": "analysis_scope", "header": "客户范围" if choice.kind == "customer" else "月份范围", "question": str(choice),
-                            "options": [{"label": str(code)} for code in choice.codes],
-                            "multiple": False, "custom": choice.kind == "year"}
+                question = {
+                    "kind": "analysis_scope",
+                    "header": "客户范围" if choice.kind == "customer" else "月份范围",
+                    "question": str(choice),
+                    "options": [{"label": str(code)} for code in choice.codes],
+                    "multiple": False,
+                    "custom": choice.kind == "year",
+                }
                 pq = question_manager.create(self.state["conv_id"], [question])
-                await self.callback("question.asked", {"request_id": pq.request_id, "conv_id": pq.conv_id, "questions": [question]})
+                await self.callback(
+                    "question.asked",
+                    {
+                        "request_id": pq.request_id,
+                        "conv_id": pq.conv_id,
+                        "questions": [question],
+                    },
+                )
                 try:
                     await asyncio.wait_for(pq.event.wait(), self.timeout)
                     if pq.rejected:
@@ -1106,9 +1328,15 @@ class TermClarifier:
                         raise ValueError("年份选择必须为四位年份。")
                     if choice.kind == "customer" and answer not in choice.codes:
                         raise ValueError("客户选择不属于实际候选。")
-                    await self.callback("question.replied", {"request_id": pq.request_id})
+                    await self.callback(
+                        "question.replied", {"request_id": pq.request_id}
+                    )
                     if choice.kind == "customer":
-                        requirements["analysis_scope"] = {"customer_candidates": [{"value": answer, "evidence": answer}]}
+                        requirements["analysis_scope"] = {
+                            "customer_candidates": [
+                                {"value": answer, "evidence": answer}
+                            ]
+                        }
                         text += "；客户选择：" + answer
                     else:
                         text += "；日期范围选定：" + answer + "年" + choice.value
@@ -1118,7 +1346,9 @@ class TermClarifier:
                 finally:
                     question_manager.remove(pq.request_id)
                     if not pq.answers:
-                        await self.callback("question.rejected", {"request_id": pq.request_id})
+                        await self.callback(
+                            "question.rejected", {"request_id": pq.request_id}
+                        )
 
 
 def make_clarify_term(clarifier: TermClarifier):
@@ -1192,7 +1422,10 @@ def make_json_llm(client, model: str):
             logger.warning(
                 "term_json_invalid reason=%s position=%s response_length=%s "
                 "finish=%s trailing_protocol_token=%s",
-                error.msg, error.pos, len(text), finish_reason,
+                error.msg,
+                error.pos,
+                len(text),
+                finish_reason,
                 bool(re.search(r"<\|(?:im_end|eot_id|endoftext)\|>$", text)),
             )
             raise

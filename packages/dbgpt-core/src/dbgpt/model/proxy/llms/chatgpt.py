@@ -307,10 +307,16 @@ class OpenAILLMClient(ProxyLLMClient):
             payload["tools"] = request.tools
         if request.tool_choice is not None:
             payload["tool_choice"] = request.tool_choice
-        request_thinking = (request.context.extra or {}).get("thinking_enabled") if request.context else None
+        request_thinking = (
+            (request.context.extra or {}).get("thinking_enabled")
+            if request.context
+            else None
+        )
         if model == "LongCat-2.5-Preview" and isinstance(request_thinking, bool):
             extra_body = dict(payload.get("extra_body") or {})
-            extra_body["thinking"] = {"type": "enabled" if request_thinking else "disabled"}
+            extra_body["thinking"] = {
+                "type": "enabled" if request_thinking else "disabled"
+            }
             payload["extra_body"] = extra_body
         return payload
 
@@ -372,7 +378,10 @@ class OpenAILLMClient(ProxyLLMClient):
                 for tl in raw_tool_calls
             ]
         return ModelOutput.build(
-            text, reasoning_content, usage=usage, tool_calls=tool_calls,
+            text,
+            reasoning_content,
+            usage=usage,
+            tool_calls=tool_calls,
             finish_reason=chat_completion.choices[0].finish_reason,
         )
 

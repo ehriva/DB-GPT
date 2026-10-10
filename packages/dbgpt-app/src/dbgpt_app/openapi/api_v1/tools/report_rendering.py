@@ -13,8 +13,11 @@ def record_validated_result(
     state, columns, rows, *, source, result_id=None, source_result_ids=None
 ):
     columns, rows = list(columns), [list(row) for row in rows]
-    required_inputs = {c for r in state.get("task_requirements", {}).get("ratios", [])
-                       for c in r.get("required_inputs", [])} or {"材料成本单价", "工费", "销售数量", "销售金额"}
+    required_inputs = {
+        c
+        for r in state.get("task_requirements", {}).get("ratios", [])
+        for c in r.get("required_inputs", [])
+    } or {"材料成本单价", "工费", "销售数量", "销售金额"}
     if "source_sales_row_id" in columns and required_inputs <= set(columns):
         derived_missing = [
             int(any(row[columns.index(c)] is None for c in required_inputs))
@@ -53,7 +56,9 @@ def record_validated_result(
         "conv_id": state.get("conv_id"),
         "database": state.get("term_datasource", ""),
         "source_result_ids": list(source_result_ids or []),
-        "analysis_scope": copy.deepcopy(state.get("task_requirements", {}).get("analysis_scope")),
+        "analysis_scope": copy.deepcopy(
+            state.get("task_requirements", {}).get("analysis_scope")
+        ),
     }
     state.setdefault("validated_results", {})[result_id] = copy.deepcopy(snapshot)
     return result_id
@@ -79,24 +84,36 @@ def render_results(state, result_ids, title):
             not snapshot
             or snapshot["conv_id"] != state.get("conv_id")
             or snapshot["database"] != state.get("term_datasource", "")
-            or snapshot.get("analysis_scope") != state.get("task_requirements", {}).get("analysis_scope")
+            or snapshot.get("analysis_scope")
+            != state.get("task_requirements", {}).get("analysis_scope")
         ):
             raise ValueError("引用的结果不存在、属于旧任务或数据源不匹配。")
         snapshots.append(snapshot)
     for metric, _, _ in _ratio_definitions(state):
         if not any(metric in s["columns"] for s in snapshots):
             raise ValueError(f"报告缺少已验证的{metric}完整结果。")
-        if "期间" in state.get("task_requirements", {}).get("analysis_scope", {}).get("group_by", []):
+        if "期间" in state.get("task_requirements", {}).get("analysis_scope", {}).get(
+            "group_by", []
+        ):
             monthly = False
             for snapshot in snapshots:
-                period = _column(snapshot["columns"], ["期间", "月份", "period", "month"])
-                if metric in snapshot["columns"] and period is not None and "source_sales_row_id" not in snapshot["columns"]:
+                period = _column(
+                    snapshot["columns"], ["期间", "月份", "period", "month"]
+                )
+                if (
+                    metric in snapshot["columns"]
+                    and period is not None
+                    and "source_sales_row_id" not in snapshot["columns"]
+                ):
                     months = [row[period] for row in snapshot["rows"]]
                     monthly = monthly or len(set(months)) == len(months)
             if not monthly:
-                raise ValueError(f"原需求按月分析，报告必须交付{metric}的逐月汇总；总计或逐行明细不能替代。")
+                raise ValueError(
+                    f"原需求按月分析，报告必须交付{metric}的逐月汇总；总计或逐行明细不能替代。"
+                )
     if state.get("query_data_gaps"):
-        # require_value can still deliver the unavailable report, with an incomplete task.
+        # require_value can still deliver the unavailable report, but the task
+        # itself must stay incomplete.
         blocking = [
             key
             for key in state["query_data_gaps"]
@@ -117,7 +134,8 @@ def render_results(state, result_ids, title):
                 not referenced
                 or referenced["conv_id"] != state.get("conv_id")
                 or referenced["database"] != state.get("term_datasource", "")
-                or referenced.get("analysis_scope") != state.get("task_requirements", {}).get("analysis_scope")
+                or referenced.get("analysis_scope")
+                != state.get("task_requirements", {}).get("analysis_scope")
             ):
                 raise ValueError("报告依赖的源结果不存在、属于其他任务或数据源。")
             visited.add(source_id)
@@ -192,7 +210,10 @@ def render_results(state, result_ids, title):
                 warning = {
                     **warning,
                     "affected_rows": len(details),
-                    "message": f"{metric}：缺少{'、'.join(missing_fields) or '所需输入'}，完整比率为NULL，影响{len(details)}行、{len(products)}个产品。",
+                    "message": (
+                        f"{metric}：缺少{'、'.join(missing_fields) or '所需输入'}，"
+                        f"完整比率为NULL，影响{len(details)}行、{len(products)}个产品。"
+                    ),
                 }
                 warnings[metric] = warning
                 state.setdefault("data_warnings", {})[metric] = copy.deepcopy(warning)
@@ -284,7 +305,12 @@ def render_results(state, result_ids, title):
     html = (
         '<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>'
         + escape(title)
-        + "</title><style>body{font-family:sans-serif;margin:32px;color:#172033}table{border-collapse:collapse;margin:24px 0}td,th{padding:10px;border:1px solid #cbd5e1}th{background:#eef2ff}</style></head><body><h1>"
+        + "</title><style>"
+        "body{font-family:sans-serif;margin:32px;color:#172033}"
+        "table{border-collapse:collapse;margin:24px 0}"
+        "td,th{padding:10px;border:1px solid #cbd5e1}"
+        "th{background:#eef2ff}"
+        "</style></head><body><h1>"
         + escape(title)
         + "</h1><p>生成时间："
         + datetime.now().astimezone().isoformat(timespec="seconds")

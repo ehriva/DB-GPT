@@ -19,9 +19,9 @@ from dbgpt.agent.resource.tool.base import tool
 
 from .query_quality import (
     _ratio_definitions,
+    query_result_catalog,
     ratio_delivery_hint,
     validate_python_ratio_output,
-    query_result_catalog,
 )
 from .report_rendering import record_validated_result
 
@@ -128,7 +128,8 @@ def make_code_interpreter(react_state: Dict[str, Any]):
             "generate charts, or perform calculations. "
             "Each call is independent; reload files every time. Database query "
             "results are in QUERY_RESULT_PATH (JSON columns/rows); metadata is "
-            "also in QUERY_RESULTS, keyed by actual result_id with path/columns/tables. "
+            "also in QUERY_RESULTS, keyed by actual result_id with "
+            "path/columns/tables. "
             "Use json.load(open(QUERY_RESULTS[result_id]['path'],encoding='utf-8')) "
             "for multiple SQL sources; do not invent filenames. "
             "in DATABASE_PROFILE_PATH. _run.py is your current script, not a "
@@ -226,7 +227,9 @@ def make_code_interpreter(react_state: Dict[str, Any]):
                     files_json_path=react_state.get("files_json_path"),
                     extra={
                         "QUERY_RESULT_PATH": react_state.get("query_result_path", ""),
-                        "QUERY_RESULTS_JSON": json.dumps(query_result_catalog(react_state), ensure_ascii=False),
+                        "QUERY_RESULTS_JSON": json.dumps(
+                            query_result_catalog(react_state), ensure_ascii=False
+                        ),
                         "DATABASE_PROFILE_PATH": react_state.get(
                             "database_profile_path", ""
                         ),
@@ -264,7 +267,8 @@ def make_code_interpreter(react_state: Dict[str, Any]):
             output_text += (
                 "\n当前查询JSON列顺序："
                 + json.dumps(source_schemas, ensure_ascii=False)
-                + "\n不要假定row[8]/row[10]等固定位置；source_sales_row_id会改变SELECT *的列位置。"
+                + "\n不要假定row[8]/row[10]等固定位置；"
+                "source_sales_row_id会改变SELECT *的列位置。"
                 "使用records=[dict(zip(data['columns'],row)) for row in data['rows']]，"
                 "销售行使用r['销售数量']、r['销售金额']、r['期间']、r['产品编码']；"
                 "成本同样按列名读取。sql_query是独立工具，不能在Python中直接调用。"
@@ -309,7 +313,11 @@ def make_code_interpreter(react_state: Dict[str, Any]):
                     for rid in source_ids
                 )
             ):
-                metric_error = "数据库财务结果必须引用当前任务真实查询的source_result_ids；没有源数据的常数不能注册为已验证事实。请先用sql_query取得真实源数据。"
+                metric_error = (
+                    "数据库财务结果必须引用当前任务真实查询的source_result_ids；"
+                    "没有源数据的常数不能注册为已验证事实。"
+                    "请先用sql_query取得真实源数据。"
+                )
                 for metric, _, _ in _ratio_definitions(react_state):
                     react_state.setdefault("query_data_gaps", {})[metric] = (
                         "该指标的数据来源尚未通过校验。"
@@ -338,7 +346,10 @@ def make_code_interpreter(react_state: Dict[str, Any]):
                             source="python",
                             source_result_ids=source_ids,
                         )
-                        output_text += f"\n已验证结果result_id={result_id}；财务报告通过result_ids引用。"
+                        output_text += (
+                            f"\n已验证结果result_id={result_id}；"
+                            "财务报告通过result_ids引用。"
+                        )
                         break
             hint = ratio_delivery_hint(react_state)
             if hint:

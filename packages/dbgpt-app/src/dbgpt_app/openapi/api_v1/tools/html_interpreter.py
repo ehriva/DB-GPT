@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 from urllib.parse import quote
 
 from dbgpt.agent.resource.tool.base import tool
+
 from .query_quality import _ratio_definitions, ratio_delivery_hint
 from .report_rendering import render_results
 
@@ -22,8 +23,10 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
             "将 HTML 渲染为可交互的网页报告，这是向用户展示网页报告的唯一方式。"
             "传入完整报告；若检查失败，请修正缺失项后重新调用。"
             "报告生成成功且全部目标达成后才可 terminate。"
-            "当前任务要求计算比率的财务报告必须使用result_ids引用sql_query/code_interpreter返回的已验证结果。"
-            '调用 {"result_ids":["实际result_id"],"title":"报告标题"}，系统渲染数据与事实。'
+            "当前任务要求计算比率的财务报告必须使用result_ids引用"
+            "sql_query/code_interpreter返回的已验证结果。"
+            '调用 {"result_ids":["实际result_id"],"title":"报告标题"}，'
+            "系统渲染数据与事实。"
             "此模式不得传入自由HTML、模板或文件补写数字；缺失时同时选择真实销售缺失明细结果。"
             "【仅非财务报告使用以下通用模式】直接传入完整的 HTML 字符串："
             '{"html": "<html>...</html>", "title": "报告标题"}。'
@@ -60,16 +63,37 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
         if _ratio_definitions(react_state) or result_ids is not None:
             try:
                 if html or file_path or template_path or data:
-                    raise ValueError("财务报告只能通过result_ids生成，不能传入自由HTML或模板事实。")
+                    raise ValueError(
+                        "财务报告只能通过result_ids生成，不能传入自由HTML或模板事实。"
+                    )
                 html, factual_summary = render_results(react_state, result_ids, title)
             except (ValueError, TypeError, KeyError) as error:
-                available = {rid: result["columns"] for rid, result in react_state.get("validated_results", {}).items()}
-                feedback = (str(error) + "\n当前任务可用result_ids及列：" + json.dumps(available, ensure_ascii=False)
-                            + "\n财务模式仅传result_ids和title，html保持空；需要同一范围的完整比率结果和真实缺失明细。"
-                            + ("\n" + ratio_delivery_hint(react_state) if ratio_delivery_hint(react_state) else ""))
-                return json.dumps({"success": False, "error": feedback, "chunks": [
-                    {"output_type": "text", "content": feedback},
-                ]}, ensure_ascii=False)
+                available = {
+                    rid: result["columns"]
+                    for rid, result in react_state.get("validated_results", {}).items()
+                }
+                feedback = (
+                    str(error)
+                    + "\n当前任务可用result_ids及列："
+                    + json.dumps(available, ensure_ascii=False)
+                    + "\n财务模式仅传result_ids和title，html保持空；"
+                    "需要同一范围的完整比率结果和真实缺失明细。"
+                    + (
+                        "\n" + ratio_delivery_hint(react_state)
+                        if ratio_delivery_hint(react_state)
+                        else ""
+                    )
+                )
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": feedback,
+                        "chunks": [
+                            {"output_type": "text", "content": feedback},
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
 
         # ── Mode 1: template_path + data ──
         if template_path and template_path.strip():
@@ -339,7 +363,11 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
             "path": str(report_path),
             "url": report_url,
             "missing": missing,
-            **({"summary": factual_summary, "result_ids": result_ids} if factual_summary else {}),
+            **(
+                {"summary": factual_summary, "result_ids": result_ids}
+                if factual_summary
+                else {}
+            ),
         }
         message = (
             ("报告交付检查未通过：" + "；".join(missing))

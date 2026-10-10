@@ -53,13 +53,28 @@ def query_result_catalog(state):
     selected = {}
     for rid, snapshot in state.get("validated_results", {}).items():
         path = snapshot.get("result_file")
-        if (snapshot.get("source") != "sql" or not path or not Path(path).is_file()
-                or snapshot.get("conv_id") != state.get("conv_id")
-                or snapshot.get("database") != state.get("term_datasource", "")
-                or snapshot.get("analysis_scope") != state.get("task_requirements", {}).get("analysis_scope")):
+        if (
+            snapshot.get("source") != "sql"
+            or not path
+            or not Path(path).is_file()
+            or snapshot.get("conv_id") != state.get("conv_id")
+            or snapshot.get("database") != state.get("term_datasource", "")
+            or snapshot.get("analysis_scope")
+            != state.get("task_requirements", {}).get("analysis_scope")
+        ):
             continue
-        key = (tuple(snapshot.get("sql_sources", [])), "source_sales_row_id" in snapshot["columns"])
-        selected[key] = (rid, {"path": path, "columns": snapshot["columns"], "tables": snapshot.get("sql_sources", [])})
+        key = (
+            tuple(snapshot.get("sql_sources", [])),
+            "source_sales_row_id" in snapshot["columns"],
+        )
+        selected[key] = (
+            rid,
+            {
+                "path": path,
+                "columns": snapshot["columns"],
+                "tables": snapshot.get("sql_sources", []),
+            },
+        )
     return dict(selected.values())
 
 
@@ -95,13 +110,31 @@ def validate_python_ratio_output(state, output):
             continue
         if isinstance(payload, dict) and {"columns", "rows"} <= payload.keys():
             columns, rows = payload["columns"], payload["rows"]
-            if state.get("term_datasource") and state.get("task_requirements", {}).get("analysis_scope") and any(metric in columns for metric, _, _ in _ratio_definitions(state)):
+            if (
+                state.get("term_datasource")
+                and state.get("task_requirements", {}).get("analysis_scope")
+                and any(metric in columns for metric, _, _ in _ratio_definitions(state))
+            ):
                 sources = payload.get("source_result_ids", [])
                 snapshots = [state.get("validated_results", {}).get(r) for r in sources]
-                if not snapshots or any(not s or s.get("analysis_scope") != state["task_requirements"]["analysis_scope"] for s in snapshots):
-                    return "Python指标需引用同数据源、同客户/月度范围的source_result_ids。"
-                if not any("source_sales_row_id" in s["columns"] and "erp销售" in s.get("sql_sources", []) for s in snapshots):
-                    return "Python指标需要引用已核对范围的销售身份明细来源，SELECT *或成本源不能代替。"
+                if not snapshots or any(
+                    not s
+                    or s.get("analysis_scope")
+                    != state["task_requirements"]["analysis_scope"]
+                    for s in snapshots
+                ):
+                    return (
+                        "Python指标需引用同数据源、同客户/月度范围的source_result_ids。"
+                    )
+                if not any(
+                    "source_sales_row_id" in s["columns"]
+                    and "erp销售" in s.get("sql_sources", [])
+                    for s in snapshots
+                ):
+                    return (
+                        "Python指标需要引用已核对范围的销售身份明细来源，"
+                        "SELECT *或成本源不能代替。"
+                    )
             needs_join_check = (
                 state.get("sales_source_read")
                 and state.get("cost_source_read")
@@ -119,7 +152,10 @@ def validate_python_ratio_output(state, output):
                 "source_sales_row_count",
                 "joined_sales_row_count",
             } <= set(columns):
-                return "Python销售成本计算必须返回真实原销售和处理后行数及关联证据；请按提示补充实际校验。"
+                return (
+                    "Python销售成本计算必须返回真实原销售和处理后行数及关联证据；"
+                    "请按提示补充实际校验。"
+                )
             if "sales_cost_join" in state.get("query_data_gaps", {}) and {
                 "source_sales_row_count",
                 "joined_sales_row_count",
@@ -133,14 +169,20 @@ def validate_python_ratio_output(state, output):
 
 
 def _monthly_total_row(columns, row):
-    period = next((c for c in ("期间", "月份", "period", "month") if c in columns), None)
+    period = next(
+        (c for c in ("期间", "月份", "period", "month") if c in columns), None
+    )
     return (
         period is not None
         and row[columns.index(period)] in {"合计", "总计"}
         and all(
             row[columns.index(c)] is None
             for c in (
-                "产品编码", "产品代码", "料号", "product_code", "source_sales_row_id"
+                "产品编码",
+                "产品代码",
+                "料号",
+                "product_code",
+                "source_sales_row_id",
             )
             if c in columns
         )
@@ -159,8 +201,18 @@ def validate_explicit_ratios(state, columns, rows):
         not isinstance(row, (list, tuple)) or len(row) != len(columns) for row in rows
     ):
         return "计算结果的rows必须与columns列数一致。"
-    if "期间" in state.get("task_requirements", {}).get("analysis_scope", {}).get("group_by", []) and any(metric in columns for metric, _, _ in definitions) and not any(c in columns for c in ("期间", "月份", "period", "month")):
-        return "原需求要求按月汇总，计算结果必须包含期间/月份并逐月返回；总计不能替代月度指标。"
+    if (
+        "期间"
+        in state.get("task_requirements", {})
+        .get("analysis_scope", {})
+        .get("group_by", [])
+        and any(metric in columns for metric, _, _ in definitions)
+        and not any(c in columns for c in ("期间", "月份", "period", "month"))
+    ):
+        return (
+            "原需求要求按月汇总，计算结果必须包含期间/月份并逐月返回；"
+            "总计不能替代月度指标。"
+        )
     cost_error = validate_cost_population(state, columns, rows)
     if cost_error:
         return cost_error
@@ -237,7 +289,9 @@ def validate_explicit_ratios(state, columns, rows):
                 if den == 0:
                     if ratio is not None:
                         return "分母为0时比率应返回NULL，并明确不适用。"
-                    if ratio_index == ratio_indexes[0] and not _monthly_total_row(columns, row):
+                    if ratio_index == ratio_indexes[0] and not _monthly_total_row(
+                        columns, row
+                    ):
                         zero_denominators += 1
                     continue
                 try:
@@ -306,23 +360,41 @@ def validate_cost_population(state, columns, rows):
         return "成本指标必须有当前范围的真实销售成本输入证据，请先查询销售身份明细。"
     records = evidence["records"]
     group_fields = []
-    for source, aliases in (("期间", ("期间", "月份", "period", "month")), ("产品编码", ("产品编码", "产品代码", "料号", "product_code")), ("source_sales_row_id", ("source_sales_row_id",))):
+    for source, aliases in (
+        ("期间", ("期间", "月份", "period", "month")),
+        ("产品编码", ("产品编码", "产品代码", "料号", "product_code")),
+        ("source_sales_row_id", ("source_sales_row_id",)),
+    ):
         output = next((c for c in aliases if c in columns), None)
         if output:
             group_fields.append((source, output))
     expected_groups = {tuple(r[source] for source, _ in group_fields) for r in records}
-    actual_groups = [tuple(row[columns.index(output)] for _, output in group_fields) for row in rows]
-    detail_groups = [key for row, key in zip(rows, actual_groups) if not _monthly_total_row(columns, row)]
+    actual_groups = [
+        tuple(row[columns.index(output)] for _, output in group_fields) for row in rows
+    ]
+    detail_groups = [
+        key
+        for row, key in zip(rows, actual_groups)
+        if not _monthly_total_row(columns, row)
+    ]
     total_count = sum(_monthly_total_row(columns, row) for row in rows)
-    if set(detail_groups) != expected_groups or total_count > 1 or len(set(actual_groups)) != len(
-        actual_groups
+    if (
+        set(detail_groups) != expected_groups
+        or total_count > 1
+        or len(set(actual_groups)) != len(actual_groups)
     ):
         return "成本汇总的实际月份/产品集合与目标销售范围不一致。"
     for contract in contracts:
         for row, key in zip(rows, actual_groups):
-            all_records = records if _monthly_total_row(columns, row) else [
-                r for r in records if tuple(r[source] for source, _ in group_fields) == key
-            ]
+            all_records = (
+                records
+                if _monthly_total_row(columns, row)
+                else [
+                    r
+                    for r in records
+                    if tuple(r[source] for source, _ in group_fields) == key
+                ]
+            )
             complete = [
                 r
                 for r in all_records
@@ -675,12 +747,16 @@ def visible_source_column(relation, table, column, inherited=None):
                 # SQLite's hidden rowid is not exported by SELECT * into a CTE.
                 if visible.casefold() not in {"rowid", "_rowid_", "oid"}:
                     candidates.add(visible)
-            elif (
-                isinstance(expression, Identifier)
-                and (expression.get_real_name() == visible or (
+            elif isinstance(expression, Identifier) and (
+                expression.get_real_name() == visible
+                or (
                     visible.casefold() in {"rowid", "_rowid_", "oid"}
-                    and sales_identity_column(relation, expression.get_alias() or expression.get_real_name(), ctes)
-                ))
+                    and sales_identity_column(
+                        relation,
+                        expression.get_alias() or expression.get_real_name(),
+                        ctes,
+                    )
+                )
             ):
                 parent = expression.get_parent_name()
                 if parent is None or parent.casefold() == alias:
@@ -709,7 +785,10 @@ def validate_cost_join(state, sql, columns, rows):
             state.setdefault("query_data_gaps", {})["sales_cost_join"] = (
                 "原销售行标识来源尚未通过校验。"
             )
-            return "source_sales_row_id必须来自ERP销售的真实rowid，不能使用成本rowid、金额或新编号。"
+            return (
+                "source_sales_row_id必须来自ERP销售的真实rowid，"
+                "不能使用成本rowid、金额或新编号。"
+            )
     if aggregate or {"source_sales_row_count", "joined_sales_row_count"} <= set(
         columns
     ):
@@ -723,7 +802,11 @@ def validate_cost_join(state, sql, columns, rows):
             state.setdefault("query_data_gaps", {})["sales_cost_join"] = (
                 "原销售和关联后计数来源尚未通过校验。"
             )
-            return "该结果未完成关联检查：原行数必须来自未关联销售范围，关联后行数来自处理后的关联范围；不能两者都取关联后的COUNT或相等常数。"
+            return (
+                "该结果未完成关联检查：原行数必须来自未关联销售范围，"
+                "关联后行数来自处理后的关联范围；"
+                "不能两者都取关联后的COUNT或相等常数。"
+            )
     state["sales_cost_join_verified"] = True
     return None
 
@@ -872,7 +955,10 @@ def validate_python_sales_evidence(state, payload):
     sources = payload.get("source_result_ids")
     joined_ids = payload.get("joined_sales_row_ids")
     if not isinstance(sources, list) or not sources or not isinstance(joined_ids, list):
-        return "Python关联检查必须引用source_result_ids，并返回实际处理后的joined_sales_row_ids；仅打印相等计数不能通过。"
+        return (
+            "Python关联检查必须引用source_result_ids，"
+            "并返回实际处理后的joined_sales_row_ids；仅打印相等计数不能通过。"
+        )
     identities = {}
     source_records = []
     for rid in sources:
@@ -898,7 +984,8 @@ def validate_python_sales_evidence(state, payload):
             or not snapshot.get("sales_source")
             or snapshot["conv_id"] != state.get("conv_id")
             or snapshot["database"] != state.get("term_datasource", "")
-            or snapshot.get("analysis_scope") != state.get("task_requirements", {}).get("analysis_scope")
+            or snapshot.get("analysis_scope")
+            != state.get("task_requirements", {}).get("analysis_scope")
         ):
             return "Python关联原行证据必须来自当前任务未关联的ERP销售明细结果。"
         columns = snapshot["columns"]
@@ -929,16 +1016,21 @@ def validate_python_sales_evidence(state, payload):
         and s.get("sql_sources")
         and set(s["sql_sources"]) <= {"材料单价", "工费单价"}
     ]
-    joined_source = state.get("validated_results", {}).get(payload.get("joined_result_id"))
+    joined_source = state.get("validated_results", {}).get(
+        payload.get("joined_result_id")
+    )
     joined_costs_verified = False
     if payload.get("joined_result_id"):
         if (
             not joined_source
             or joined_source.get("conv_id") != state.get("conv_id")
             or joined_source.get("database") != state.get("term_datasource", "")
-            or joined_source.get("analysis_scope") != state.get("task_requirements", {}).get("analysis_scope")
+            or joined_source.get("analysis_scope")
+            != state.get("task_requirements", {}).get("analysis_scope")
             or "erp销售" not in joined_source.get("sql_sources", [])
-            or not {"材料单价", "工费单价"}.intersection(joined_source.get("sql_sources", []))
+            or not {"材料单价", "工费单价"}.intersection(
+                joined_source.get("sql_sources", [])
+            )
             or "source_sales_row_id" not in joined_source["columns"]
             or not state.get("cost_input_evidence")
         ):
@@ -947,12 +1039,17 @@ def validate_python_sales_evidence(state, payload):
         source_ids = [row[index] for row in joined_source["rows"]]
         if len(source_ids) != len(identities) or set(source_ids) != set(identities):
             return "Python关联来源的实际销售身份与原销售范围不一致。"
-        error = validate_cost_population(state, joined_source["columns"], joined_source["rows"])
+        error = validate_cost_population(
+            state, joined_source["columns"], joined_source["rows"]
+        )
         if error:
             return error
         joined_costs_verified = True
     if state.get("cost_source_read") and not cited_costs and not joined_costs_verified:
-        return "Python关联需在source_result_ids同时引用实际销售及成本源结果，不能省略成本来源。"
+        return (
+            "Python关联需在source_result_ids同时引用实际销售及成本源结果，"
+            "不能省略成本来源。"
+        )
     for snapshot in cited_costs:
         if snapshot.get("conv_id") != state.get("conv_id") or snapshot.get(
             "database"
@@ -1016,8 +1113,18 @@ def validate_python_sales_evidence(state, payload):
     if period is not None:
         counts = Counter(identities.values())
         if any(
-            row[original] != (len(identities) if _monthly_total_row(columns, row) else counts[str(row[period])])
-            or row[joined] != (len(joined_ids) if _monthly_total_row(columns, row) else counts[str(row[period])])
+            row[original]
+            != (
+                len(identities)
+                if _monthly_total_row(columns, row)
+                else counts[str(row[period])]
+            )
+            or row[joined]
+            != (
+                len(joined_ids)
+                if _monthly_total_row(columns, row)
+                else counts[str(row[period])]
+            )
             for row in rows
         ):
             return "Python按月销售计数与实际源明细不一致。"
@@ -1115,10 +1222,17 @@ def ratio_delivery_hint(state):
         (label, num, den)
         for label, num, den in _ratio_definitions(state)
         if (label in gaps and validation.get(label) != "missing_inputs")
-        or (state.get("term_datasource") and state.get("requires_report") and not any(
-            label in snapshot["columns"] and snapshot.get("conv_id") == state.get("conv_id")
-            and snapshot.get("analysis_scope") == state.get("task_requirements", {}).get("analysis_scope")
-            for snapshot in state.get("validated_results", {}).values()))
+        or (
+            state.get("term_datasource")
+            and state.get("requires_report")
+            and not any(
+                label in snapshot["columns"]
+                and snapshot.get("conv_id") == state.get("conv_id")
+                and snapshot.get("analysis_scope")
+                == state.get("task_requirements", {}).get("analysis_scope")
+                for snapshot in state.get("validated_results", {}).values()
+            )
+        )
     ]
     join_pending = "sales_cost_join" in gaps
     if not pending and not join_pending:
@@ -1129,7 +1243,9 @@ def ratio_delivery_hint(state):
             )
         return None
     columns = []
-    if "期间" in state.get("task_requirements", {}).get("analysis_scope", {}).get("group_by", []):
+    if "期间" in state.get("task_requirements", {}).get("analysis_scope", {}).get(
+        "group_by", []
+    ):
         columns.append("期间")
     for label, num, den in pending:
         for name in (num, den, label, "missing_input_count"):

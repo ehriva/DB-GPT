@@ -22,11 +22,11 @@ missing_price_count instead of being counted as zero.
 
 import argparse
 import csv
-from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
 import json
-from pathlib import Path
 import sqlite3
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 
 
 def connect_readonly(path: Path) -> sqlite3.Connection:
@@ -49,8 +49,7 @@ def _round_amount(value: float | None) -> float | None:
     """
     if value is None:
         return None
-    return float(Decimal(repr(value)).quantize(Decimal("0.01"),
-                                               rounding=ROUND_HALF_UP))
+    return float(Decimal(repr(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _clean_quantity(value: float) -> float:
@@ -63,8 +62,9 @@ def _rank_by_group(rows: list[dict], key_fields: tuple[str, ...]) -> list[dict]:
     units = sorted({row["unit"] for row in rows})
     merged: dict[tuple, dict] = {}
     for row in rows:
-        key = ((row["week_start"], row["currency_code"])
-               + tuple(row[field] for field in key_fields))
+        key = (row["week_start"], row["currency_code"]) + tuple(
+            row[field] for field in key_fields
+        )
         entry = merged.get(key)
         if entry is None:
             entry = {
@@ -89,13 +89,21 @@ def _rank_by_group(rows: list[dict], key_fields: tuple[str, ...]) -> list[dict]:
         entry["detail_count"] += row["detail_count"]
         entry["missing_price_count"] += row["missing_price_count"]
     ranked = []
-    periods = sorted({(entry["week_start"], entry["currency_code"])
-                      for entry in merged.values()})
+    periods = sorted(
+        {(entry["week_start"], entry["currency_code"]) for entry in merged.values()}
+    )
     for period in periods:
-        group = [entry for entry in merged.values()
-                 if (entry["week_start"], entry["currency_code"]) == period]
-        group.sort(key=lambda entry: (-(entry["amount_excl_tax"] or 0.0),
-                                      *(entry[field] or "" for field in key_fields)))
+        group = [
+            entry
+            for entry in merged.values()
+            if (entry["week_start"], entry["currency_code"]) == period
+        ]
+        group.sort(
+            key=lambda entry: (
+                -(entry["amount_excl_tax"] or 0.0),
+                *(entry[field] or "" for field in key_fields),
+            )
+        )
         for rank, entry in enumerate(group, start=1):
             output = {
                 "week_start": entry["week_start"],
@@ -122,30 +130,39 @@ def _rank_by_material(rows: list[dict]) -> list[dict]:
     ranked = []
     periods = sorted({(row["week_start"], row["currency_code"]) for row in rows})
     for period in periods:
-        group = [row for row in rows
-                 if (row["week_start"], row["currency_code"]) == period]
-        group.sort(key=lambda row: (-(row["amount_excl_tax"] or 0.0),
-                                    row["material_code"], row["length_value"] or "",
-                                    row["brand_code"] or "", row["unit"]))
+        group = [
+            row for row in rows if (row["week_start"], row["currency_code"]) == period
+        ]
+        group.sort(
+            key=lambda row: (
+                -(row["amount_excl_tax"] or 0.0),
+                row["material_code"],
+                row["length_value"] or "",
+                row["brand_code"] or "",
+                row["unit"],
+            )
+        )
         for rank, row in enumerate(group, start=1):
-            ranked.append({
-                "week_start": row["week_start"],
-                "week_end": row["week_end"],
-                "week": _week_label(row["week_start"]),
-                "currency_code": row["currency_code"],
-                "rank": rank,
-                "material_code": row["material_code"],
-                "material_name": row["material_name"],
-                "length_value": row["length_value"],
-                "brand_code": row["brand_code"],
-                "brand_name": row["brand_name"],
-                "unit": row["unit"],
-                "quantity": _clean_quantity(row["quantity"]),
-                "amount_excl_tax": _round_amount(row["amount_excl_tax"]),
-                "amount_incl_tax": _round_amount(row["amount_incl_tax"]),
-                "detail_count": row["detail_count"],
-                "missing_price_count": row["missing_price_count"],
-            })
+            ranked.append(
+                {
+                    "week_start": row["week_start"],
+                    "week_end": row["week_end"],
+                    "week": _week_label(row["week_start"]),
+                    "currency_code": row["currency_code"],
+                    "rank": rank,
+                    "material_code": row["material_code"],
+                    "material_name": row["material_name"],
+                    "length_value": row["length_value"],
+                    "brand_code": row["brand_code"],
+                    "brand_name": row["brand_name"],
+                    "unit": row["unit"],
+                    "quantity": _clean_quantity(row["quantity"]),
+                    "amount_excl_tax": _round_amount(row["amount_excl_tax"]),
+                    "amount_incl_tax": _round_amount(row["amount_incl_tax"]),
+                    "detail_count": row["detail_count"],
+                    "missing_price_count": row["missing_price_count"],
+                }
+            )
     return ranked
 
 
@@ -158,24 +175,32 @@ def _rank_by_quantity(rows: list[dict]) -> list[dict]:
     ranked = []
     for week in sorted({row["week_start"] for row in rows}):
         group = [row for row in rows if row["week_start"] == week]
-        group.sort(key=lambda row: (-row["quantity"], row["material_code"],
-                                    row["length_value"] or "",
-                                    row["brand_code"] or "", row["unit"]))
+        group.sort(
+            key=lambda row: (
+                -row["quantity"],
+                row["material_code"],
+                row["length_value"] or "",
+                row["brand_code"] or "",
+                row["unit"],
+            )
+        )
         for rank, row in enumerate(group, start=1):
-            ranked.append({
-                "week_start": row["week_start"],
-                "week_end": row["week_end"],
-                "week": _week_label(row["week_start"]),
-                "rank": rank,
-                "material_code": row["material_code"],
-                "material_name": row["material_name"],
-                "length_value": row["length_value"],
-                "brand_code": row["brand_code"],
-                "brand_name": row["brand_name"],
-                "unit": row["unit"],
-                "quantity": _clean_quantity(row["quantity"]),
-                "detail_count": row["detail_count"],
-            })
+            ranked.append(
+                {
+                    "week_start": row["week_start"],
+                    "week_end": row["week_end"],
+                    "week": _week_label(row["week_start"]),
+                    "rank": rank,
+                    "material_code": row["material_code"],
+                    "material_name": row["material_name"],
+                    "length_value": row["length_value"],
+                    "brand_code": row["brand_code"],
+                    "brand_name": row["brand_name"],
+                    "unit": row["unit"],
+                    "quantity": _clean_quantity(row["quantity"]),
+                    "detail_count": row["detail_count"],
+                }
+            )
     return ranked
 
 
@@ -196,14 +221,19 @@ def _owner_by_row(conn: sqlite3.Connection, column: int) -> dict[tuple, str]:
     non-empty value forward therefore attributes every line of the document.
     """
     owners: dict[tuple, str] = {}
-    sheet_ids = [row["sheet_id"] for row in conn.execute(
-        "SELECT DISTINCT sheet_id FROM sales_outbound")]
+    sheet_ids = [
+        row["sheet_id"]
+        for row in conn.execute("SELECT DISTINCT sheet_id FROM sales_outbound")
+    ]
     for sheet_id in sheet_ids:
         current = None
-        for row in conn.execute("""
+        for row in conn.execute(
+            """
             SELECT excel_row, values_json FROM raw_rows
             WHERE sheet_id = ? ORDER BY excel_row
-        """, (sheet_id,)):
+        """,
+            (sheet_id,),
+        ):
             values = json.loads(row["values_json"])
             value = values[column] if column < len(values) else None
             if value is not None and str(value).strip():
@@ -244,15 +274,26 @@ def _weekly_summary(rows: list[dict], quantity_rows: list[dict]) -> list[dict]:
     return summary
 
 
-def report(conn: sqlite3.Connection, name: str, start: str | None = None,
-           end: str | None = None, unit: str | None = None,
-           customer: str | None = None, material: str | None = None,
-           currency: str | None = None, group: str | None = None,
-           top: int | None = None, owner: str | None = None) -> list[dict]:
+def report(
+    conn: sqlite3.Connection,
+    name: str,
+    start: str | None = None,
+    end: str | None = None,
+    unit: str | None = None,
+    customer: str | None = None,
+    material: str | None = None,
+    currency: str | None = None,
+    group: str | None = None,
+    top: int | None = None,
+    owner: str | None = None,
+) -> list[dict]:
     if name == "issues":
-        return [dict(row) for row in conn.execute(
-            "SELECT * FROM v_data_issue_summary ORDER BY business_table,issue_type"
-        )]
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM v_data_issue_summary ORDER BY business_table,issue_type"
+            )
+        ]
     if start is None or end is None:
         raise ValueError("出货查询必须提供 --start 和 --end（结束日期不包含）")
     if date.fromisoformat(start) >= date.fromisoformat(end):
@@ -274,7 +315,10 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
         "currency": currency,
     }
     if name == "shipments":
-        rows = [dict(row) for row in conn.execute("""
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT s.material_code, s.material_name, s.length_value, s.brand_code,
                    s.brand_name, s.unit, SUM(s.quantity) AS shipped_quantity,
                    COUNT(*) AS detail_count
@@ -288,9 +332,15 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
                      s.brand_name,s.unit
             ORDER BY shipped_quantity DESC,s.material_code,s.length_value,s.brand_code
             LIMIT 10
-        """, params)]
+        """,
+                params,
+            )
+        ]
     elif name == "details":
-        rows = [dict(row) for row in conn.execute("""
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT s.bill_date,s.bill_no,s.document_id,s.entry_id,
                    s.customer_code,s.customer_name,s.material_code,s.material_name,
                    s.length_value,s.brand_code,s.brand_name,s.unit,s.quantity,
@@ -303,9 +353,15 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
               AND (:material IS NULL OR s.material_code = :material)
               AND (:currency IS NULL OR s.currency_code = :currency)
             ORDER BY s.bill_date,s.document_id,s.entry_id
-        """, params)]
+        """,
+                params,
+            )
+        ]
     elif name == "salesperson-rank":
-        detail = [dict(row) for row in conn.execute("""
+        detail = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT s.sheet_id,s.excel_row,s.unit,
                    date(s.bill_date,'weekday 0','-6 days') AS week_start,
                    date(s.bill_date,'weekday 0') AS week_end,
@@ -322,14 +378,17 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
               AND (:material IS NULL OR s.material_code = :material)
               AND (:currency IS NULL OR s.currency_code = :currency)
             ORDER BY s.bill_date,s.document_id,s.entry_id
-        """, params)]
+        """,
+                params,
+            )
+        ]
         owners = _owner_by_row(conn, OWNER_COLUMNS[owner or "saler"])
         merged: dict[tuple, dict] = {}
         for row in detail:
-            name_of_owner = owners.get((row["sheet_id"], row["excel_row"]),
-                                       MISSING_OWNER)
-            key = (row["week_start"], row["currency_code"], name_of_owner,
-                   row["unit"])
+            name_of_owner = owners.get(
+                (row["sheet_id"], row["excel_row"]), MISSING_OWNER
+            )
+            key = (row["week_start"], row["currency_code"], name_of_owner, row["unit"])
             entry = merged.get(key)
             if entry is None:
                 entry = {
@@ -353,7 +412,10 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
             entry["missing_price_count"] += row["missing_price_count"]
         rows = list(merged.values())
     elif name == "amount-rank" and group == "customer":
-        rows = [dict(row) for row in conn.execute("""
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT date(s.bill_date,'weekday 0','-6 days') AS week_start,
                    date(s.bill_date,'weekday 0') AS week_end,
                    s.currency_code,s.customer_code,s.customer_name,s.unit,
@@ -374,9 +436,15 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
             GROUP BY week_start,week_end,s.currency_code,s.customer_code,
                      s.customer_name,s.unit
             ORDER BY week_start,s.currency_code,s.customer_code,s.unit
-        """, params)]
+        """,
+                params,
+            )
+        ]
     elif name == "usage-rank":
-        rows = [dict(row) for row in conn.execute("""
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT date(s.bill_date,'weekday 0','-6 days') AS week_start,
                    date(s.bill_date,'weekday 0') AS week_end,
                    s.material_code,s.material_name,s.length_value,s.brand_code,
@@ -392,9 +460,15 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
             GROUP BY week_start,week_end,s.material_code,s.material_name,
                      s.length_value,s.brand_code,s.brand_name,s.unit
             ORDER BY week_start,s.material_code,s.length_value,s.brand_code,s.unit
-        """, params)]
+        """,
+                params,
+            )
+        ]
     elif name == "amount-rank":
-        rows = [dict(row) for row in conn.execute("""
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT date(s.bill_date,'weekday 0','-6 days') AS week_start,
                    date(s.bill_date,'weekday 0') AS week_end,
                    s.currency_code,s.material_code,s.material_name,s.length_value,
@@ -417,9 +491,15 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
                      s.material_name,s.length_value,s.brand_code,s.brand_name,s.unit
             ORDER BY week_start,s.currency_code,s.material_code,s.length_value,
                      s.brand_code,s.unit
-        """, params)]
+        """,
+                params,
+            )
+        ]
     elif name == "weekly-summary":
-        rows = [dict(row) for row in conn.execute("""
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT date(s.bill_date,'weekday 0','-6 days') AS week_start,
                    date(s.bill_date,'weekday 0') AS week_end,
                    s.currency_code,
@@ -444,8 +524,14 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
               AND (:currency IS NULL OR s.currency_code = :currency)
             GROUP BY week_start,week_end,s.currency_code
             ORDER BY week_start,s.currency_code
-        """, params)]
-        quantity_rows = [dict(row) for row in conn.execute("""
+        """,
+                params,
+            )
+        ]
+        quantity_rows = [
+            dict(row)
+            for row in conn.execute(
+                """
             SELECT date(s.bill_date,'weekday 0','-6 days') AS week_start,
                    s.currency_code, s.unit, SUM(s.quantity) AS quantity
             FROM sales_outbound s
@@ -456,7 +542,10 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
               AND (:currency IS NULL OR s.currency_code = :currency)
             GROUP BY week_start,s.currency_code,s.unit
             ORDER BY week_start,s.currency_code,s.unit
-        """, params)]
+        """,
+                params,
+            )
+        ]
         rows = _weekly_summary(rows, quantity_rows)
     else:
         raise ValueError(f"Unknown report: {name}")
@@ -468,41 +557,70 @@ def report(conn: sqlite3.Connection, name: str, start: str | None = None,
         rows = _rank_by_quantity(rows)
     elif name == "salesperson-rank":
         rows = _rank_by_group(rows, ("salesperson",))
-    if top is not None and name in ("amount-rank", "usage-rank",
-                                    "salesperson-rank"):
+    if top is not None and name in ("amount-rank", "usage-rank", "salesperson-rank"):
         rows = [row for row in rows if row["rank"] <= top]
     return rows
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path,
-                        default=Path(__file__).parent / "data" / "erp_trial.sqlite")
-    parser.add_argument("--report",
-                        choices=["shipments", "details", "issues", "amount-rank",
-                                 "usage-rank", "salesperson-rank",
-                                 "weekly-summary"],
-                        required=True)
+    parser.add_argument(
+        "--db", type=Path, default=Path(__file__).parent / "data" / "erp_trial.sqlite"
+    )
+    parser.add_argument(
+        "--report",
+        choices=[
+            "shipments",
+            "details",
+            "issues",
+            "amount-rank",
+            "usage-rank",
+            "salesperson-rank",
+            "weekly-summary",
+        ],
+        required=True,
+    )
     parser.add_argument("--start")
     parser.add_argument("--end")
     parser.add_argument("--unit")
     parser.add_argument("--customer")
     parser.add_argument("--material")
-    parser.add_argument("--currency",
-                        help="只保留一种币种；省略时按币种分别排名，金额不跨币种相加")
-    parser.add_argument("--group", choices=["customer", "material"],
-                        help="amount-rank 的排名维度")
-    parser.add_argument("--top", type=int,
-                        help="只保留每周前 N 名（amount-rank / usage-rank / salesperson-rank）")
-    parser.add_argument("--owner", choices=["saler", "follow", "inner"],
-                        help="salesperson-rank 用谁：saler 销售员（默认）、follow 业务跟单、inner 内部跟单")
+    parser.add_argument(
+        "--currency", help="只保留一种币种；省略时按币种分别排名，金额不跨币种相加"
+    )
+    parser.add_argument(
+        "--group", choices=["customer", "material"], help="amount-rank 的排名维度"
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        help="只保留每周前 N 名（amount-rank / usage-rank / salesperson-rank）",
+    )
+    parser.add_argument(
+        "--owner",
+        choices=["saler", "follow", "inner"],
+        help=(
+            "salesperson-rank 用谁：saler 销售员（默认）、"
+            "follow 业务跟单、inner 内部跟单"
+        ),
+    )
     parser.add_argument("--csv", type=Path)
     args = parser.parse_args()
     conn = connect_readonly(args.db)
     try:
-        rows = report(conn, args.report, args.start, args.end, args.unit,
-                      args.customer, args.material, args.currency, args.group,
-                      args.top, args.owner)
+        rows = report(
+            conn,
+            args.report,
+            args.start,
+            args.end,
+            args.unit,
+            args.customer,
+            args.material,
+            args.currency,
+            args.group,
+            args.top,
+            args.owner,
+        )
     finally:
         conn.close()
     if args.csv:

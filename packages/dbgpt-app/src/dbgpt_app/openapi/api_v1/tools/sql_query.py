@@ -2,10 +2,10 @@
 
 import asyncio
 import json
+import re
 import threading
 import time
 import uuid
-import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -19,12 +19,12 @@ from .query_quality import (
     _select_bindings,
     confirmed_price_rule,
     original_count_scope,
+    query_result_catalog,
     sales_identity_column,
     select_sources,
     validate_cost_join,
     validate_explicit_ratios,
     visible_source_column,
-    query_result_catalog,
 )
 from .report_rendering import record_validated_result
 
@@ -33,7 +33,11 @@ QUERY_TIMEOUT_SECONDS = 60
 
 class AnalysisScopeChoice(ValueError):
     def __init__(self, value, codes, kind="customer"):
-        super().__init__(f"客户“{value}”匹配多个实际客户，请选择。" if kind == "customer" else f"月份“{value}”未说明年份，请选择或填写四位年份。")
+        super().__init__(
+            f"客户“{value}”匹配多个实际客户，请选择。"
+            if kind == "customer"
+            else f"月份“{value}”未说明年份，请选择或填写四位年份。"
+        )
         self.value = value
         self.codes = codes
         self.kind = kind
@@ -85,7 +89,9 @@ async def resolve_analysis_scope(
     elif re.search(r"不分月|只看总计|合并为总计", user_input):
         scope.update(group_by=[], grouping_evidence=user_input)
     periods = request_periods(user_input)
-    short_months = list(dict.fromkeys(int(n) for n in re.findall(r"(?<!\d)(\d{1,2})月", user_input)))
+    short_months = list(
+        dict.fromkeys(int(n) for n in re.findall(r"(?<!\d)(\d{1,2})月", user_input))
+    )
     if not periods and short_months:
         if any(not 1 <= month <= 12 for month in short_months):
             raise ValueError("月份不在1至12之间。")
@@ -96,9 +102,19 @@ async def resolve_analysis_scope(
         else:
             if "期间" not in fields:
                 raise ValueError("当前销售表没有期间字段，不能证明指定月份范围。")
-            _, actual_periods = await query_database(connector, "SELECT DISTINCT 期间 FROM ERP销售")
-            years = sorted({str(row[0])[:4] for row in actual_periods if re.fullmatch(r"20\d{2}\.\d{2}", str(row[0]))})
-            raise AnalysisScopeChoice("、".join(f"{month}月" for month in short_months), years, kind="year")
+            _, actual_periods = await query_database(
+                connector, "SELECT DISTINCT 期间 FROM ERP销售"
+            )
+            years = sorted(
+                {
+                    str(row[0])[:4]
+                    for row in actual_periods
+                    if re.fullmatch(r"20\d{2}\.\d{2}", str(row[0]))
+                }
+            )
+            raise AnalysisScopeChoice(
+                "、".join(f"{month}月" for month in short_months), years, kind="year"
+            )
     # The executable month set is proved by parsing the human phrase itself.
     # Rejected model candidate updates cannot remove or expand that month set.
     if periods:
@@ -111,18 +127,40 @@ async def resolve_analysis_scope(
     if not customers:
         names = []
         if "客户名称" in fields:
-            _, actual_names = await query_database(connector, "SELECT DISTINCT 客户名称 FROM ERP销售")
-            actual_names = [r[0] for r in actual_names if isinstance(r[0], str) and r[0]]
+            _, actual_names = await query_database(
+                connector, "SELECT DISTINCT 客户名称 FROM ERP销售"
+            )
+            actual_names = [
+                r[0] for r in actual_names if isinstance(r[0], str) and r[0]
+            ]
             names = [name for name in actual_names if name in user_input]
-            names = [name for name in names if not any(name != other and name in other for other in names)]
+            names = [
+                name
+                for name in names
+                if not any(name != other and name in other for other in names)
+            ]
             if not names:
-                object_match = re.search(r"(?:分析|查询|统计)([\u4e00-\u9fffA-Za-z]+?)(?=20\d{2}|[，,。；;\s]|$)", user_input)
-                short = object_match.group(1).split("的")[0].removeprefix("客户") if object_match else ""
+                object_match = re.search(
+                    r"(?:分析|查询|统计)([\u4e00-\u9fffA-Za-z]+?)(?=20\d{2}|[，,。；;\s]|$)",
+                    user_input,
+                )
+                short = (
+                    object_match.group(1).split("的")[0].removeprefix("客户")
+                    if object_match
+                    else ""
+                )
                 if len(short) >= 2 and any(short in name for name in actual_names):
                     names = [short]
         if not names:
-            names = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+(?:有限公司|公司)", user_input)
-            names = [re.sub(r"^(?:请|按月|逐月|每月|各月|分月|分析|查询|统计|客户|对)+", "", n) for n in names]
+            names = re.findall(
+                r"[\u4e00-\u9fffA-Za-z0-9]+(?:有限公司|公司)", user_input
+            )
+            names = [
+                re.sub(
+                    r"^(?:请|按月|逐月|每月|各月|分月|分析|查询|统计|客户|对)+", "", n
+                )
+                for n in names
+            ]
         codes = re.findall(
             r"(?<![A-Za-z0-9])[A-Z]{2,}\d{3,}(?![A-Za-z0-9])", user_input
         )
@@ -161,7 +199,8 @@ async def resolve_analysis_scope(
                     )
                     _, rows = await query_database(
                         connector,
-                        "SELECT DISTINCT 客户编码 FROM ERP销售 WHERE 客户名称 LIKE :value ESCAPE '\\'",
+                        "SELECT DISTINCT 客户编码 FROM ERP销售 "
+                        "WHERE 客户名称 LIKE :value ESCAPE '\\'",
                         {"value": "%" + escaped + "%"},
                     )
             if not rows:
@@ -220,10 +259,13 @@ async def check_analysis_scope(state, connector, statement, columns, rows):
         identities = [r[columns.index("source_sales_row_id")] for r in rows]
         duplicates = len(identities) - len(set(identities))
         if duplicates:
-            return (f"真实销售范围{len(target)}行，关联结果{len(identities)}行，其中重复销售身份{duplicates}行；"
-                    f"范围外身份{len(set(identities)-target)}行，遗漏{len(target-set(identities))}行。"
-                    "不能把重复关联行当成真实销售。先按实际产品/期间键和价格去除完全重复成本映射；"
-                    "不能删除真实销售行或填补NULL。原合法源结果仍保留。")
+            return (
+                f"真实销售范围{len(target)}行，关联结果{len(identities)}行，其中重复销售身份{duplicates}行；"
+                f"范围外身份{len(set(identities) - target)}行，"
+                f"遗漏{len(target - set(identities))}行。"
+                "不能把重复关联行当成真实销售。先按实际产品/期间键和价格去除完全重复成本映射；"
+                "不能删除真实销售行或填补NULL。原合法源结果仍保留。"
+            )
         complete_sets = [
             {
                 r["source_sales_row_id"]
@@ -244,7 +286,8 @@ async def check_analysis_scope(state, connector, statement, columns, rows):
         if len(set(identities)) != len(identities) or set(identities) != target:
             return (
                 f"销售范围不一致：目标{len(target)}行，实际{len(identities)}行；"
-                f"多出{len(set(identities) - target)}行，遗漏{len(target - set(identities))}行；不能登记交付来源。"
+                f"多出{len(set(identities) - target)}行，"
+                f"遗漏{len(target - set(identities))}行；不能登记交付来源。"
             )
         return None
     if not aggregate:
@@ -346,11 +389,14 @@ async def establish_cost_inputs(state, connector):
     placeholders = ",".join(":" + name for name in parameters) or "NULL"
     columns, sales = await query_database(
         connector,
-        f"SELECT rowid AS source_sales_row_id,* FROM ERP销售 WHERE rowid IN ({placeholders})",
+        "SELECT rowid AS source_sales_row_id,* FROM ERP销售 "
+        f"WHERE rowid IN ({placeholders})",
         parameters,
     )
     records = [dict(zip(columns, row)) for row in sales]
-    required_inputs = {field for r in contracts for field in r.get("required_inputs", [])}
+    required_inputs = {
+        field for r in contracts for field in r.get("required_inputs", [])
+    }
     for table, price, keys in (
         ("材料单价", "材料成本单价", ["期间", "产品编码"]),
         ("工费单价", "工费", ["产品编码"]),
@@ -508,7 +554,10 @@ async def check_cost_prices(state, connector, statement, columns, rows):
         alias, relation = next(iter(relations.items()))
         visible = [visible_source_column(relation, "ERP销售", k, ctes) for k in keys]
         if any(k is None for k in visible):
-            return "该结果未完成成本价格检查：原销售范围需暴露产品/期间键，请先返回源销售明细。"
+            return (
+                "该结果未完成成本价格检查：原销售范围需暴露产品/期间键，"
+                "请先返回源销售明细。"
+            )
         tokens = scope.tokens
         start = next(i for i, t in enumerate(tokens) if t.normalized == "FROM")
         if any(t.normalized == "HAVING" for t in tokens[start:]):
@@ -620,7 +669,9 @@ def make_sql_query(react_state: Dict[str, Any], database_connector: Optional[Any
             sources, aggregate = select_sources(statements[0])
             if "erp销售" in sources:
                 await establish_cost_inputs(react_state, database_connector)
-            scope_error = await check_analysis_scope(react_state, database_connector, statements[0], names, rows)
+            scope_error = await check_analysis_scope(
+                react_state, database_connector, statements[0], names, rows
+            )
             if scope_error:
                 return _error(scope_error)
             if (
@@ -641,8 +692,17 @@ def make_sql_query(react_state: Dict[str, Any], database_connector: Optional[Any
                         quality_error
                     )
             if not quality_error:
-                if "erp销售" not in sources and react_state.get("task_requirements", {}).get("analysis_scope") and any(metric in names for metric, _, _ in _ratio_definitions(react_state)):
-                    return _error("财务SQL指标必须来自当前范围的真实销售来源，常数或独立成本表不能作为销售汇总证据。")
+                if (
+                    "erp销售" not in sources
+                    and react_state.get("task_requirements", {}).get("analysis_scope")
+                    and any(
+                        metric in names
+                        for metric, _, _ in _ratio_definitions(react_state)
+                    )
+                ):
+                    return _error(
+                        "财务SQL指标必须来自当前范围的真实销售来源，常数或独立成本表不能作为销售汇总证据。"
+                    )
                 quality_error = validate_explicit_ratios(react_state, names, rows)
             if quality_error:
                 return _error(quality_error)
@@ -653,7 +713,14 @@ def make_sql_query(react_state: Dict[str, Any], database_connector: Optional[Any
             snapshot = react_state["validated_results"][result_id]
             if snapshot["columns"] != names:
                 names, rows = snapshot["columns"], snapshot["rows"]
-                path.write_text(json.dumps({"columns": names, "rows": rows}, ensure_ascii=False, default=str), encoding="utf-8")
+                path.write_text(
+                    json.dumps(
+                        {"columns": names, "rows": rows},
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
             if sources == {"erp销售"} and not aggregate:
                 react_state["sales_source_read"] = True
                 react_state["sales_cost_join_verified"] = False
@@ -752,11 +819,19 @@ def make_sql_query(react_state: Dict[str, Any], database_connector: Optional[Any
                             "content": (
                                 f"完整结果文件：{path}。仅预览被截断，完整文件未截断。"
                                 " Python 可直接读取 QUERY_RESULT_PATH。"
-                                " 按columns映射取值：records=[dict(zip(r['columns'],row)) for row in r['rows']]；"
-                                "不要对SELECT *假定固定列下标，source_sales_row_id也会占一列。"
-                                f' 财务报告引用result_ids=["{result_id}"]，不要重抄数值。'
-                                "\nPython可通过QUERY_RESULTS[result_id]['path']读取实际已验证来源；当前可用来源："
-                                + json.dumps(query_result_catalog(react_state), ensure_ascii=False)
+                                " 按columns映射取值："
+                                "records=[dict(zip(r['columns'],row)) "
+                                "for row in r['rows']]；"
+                                "不要对SELECT *假定固定列下标，"
+                                "source_sales_row_id也会占一列。"
+                                f' 财务报告引用result_ids=["{result_id}"]，'
+                                "不要重抄数值。"
+                                "\nPython可通过QUERY_RESULTS[result_id]['path']"
+                                "读取实际已验证来源；当前可用来源："
+                                + json.dumps(
+                                    query_result_catalog(react_state),
+                                    ensure_ascii=False,
+                                )
                             ),
                         },
                     ],

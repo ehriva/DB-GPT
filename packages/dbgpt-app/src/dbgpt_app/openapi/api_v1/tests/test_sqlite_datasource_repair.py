@@ -1,7 +1,7 @@
 """Existing business files must not become silently created empty databases."""
 
-from types import SimpleNamespace
 import threading
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -74,7 +74,8 @@ def test_update_uses_bound_parameters_and_closes_session():
     with engine.begin() as connection:
         connection.execute(
             text(
-                "CREATE TABLE connect_config (db_name TEXT, db_type TEXT, db_path TEXT, comment TEXT)"
+                "CREATE TABLE connect_config "
+                "(db_name TEXT, db_type TEXT, db_path TEXT, comment TEXT)"
             )
         )
         connection.execute(

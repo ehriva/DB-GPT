@@ -44,10 +44,17 @@ def report_requirements(user_input: str) -> Tuple[bool, bool]:
 
 
 def data_backfill_requested(text):
-    for match in re.finditer(r"(?:补齐|补录|补全|补充|获取缺失)[^，,。；;\n]{0,24}?(?:工费|成本|数据|输入)", text):
-        if re.search(r"(?:不要|无需|不用|不必|不需要|取消)(?:再)?\s*$", text[:match.start()]):
+    for match in re.finditer(
+        r"(?:补齐|补录|补全|补充|获取缺失)[^，,。；;\n]{0,24}?(?:工费|成本|数据|输入)",
+        text,
+    ):
+        if re.search(
+            r"(?:不要|无需|不用|不必|不需要|取消)(?:再)?\s*$", text[: match.start()]
+        ):
             continue
-        if re.match(r"(?:数据)?(?:缺失)?(?:的)?(?:说明|原因|提示)", text[match.end():]):
+        if re.match(
+            r"(?:数据)?(?:缺失)?(?:的)?(?:说明|原因|提示)", text[match.end() :]
+        ):
             continue
         return True
     return False
@@ -55,11 +62,19 @@ def data_backfill_requested(text):
 
 def explained_backfill_step(state, content):
     ratios = state.get("task_requirements", {}).get("ratios", [])
-    return not data_backfill_requested(state.get("original_user_input", "")) and bool(ratios) and all(r.get("unavailable_policy") == "explain" for r in ratios) and any(
-        warning.get("reason") == "missing_input"
-        and state.get("ratio_validation_status", {}).get(metric) == "missing_inputs"
-        for metric, warning in state.get("data_warnings", {}).items()
-    ) and bool(re.search(r"(?:补齐|补录|补充|获取缺失).*(?:数据|工费|成本|输入)", content))
+    return (
+        not data_backfill_requested(state.get("original_user_input", ""))
+        and bool(ratios)
+        and all(r.get("unavailable_policy") == "explain" for r in ratios)
+        and any(
+            warning.get("reason") == "missing_input"
+            and state.get("ratio_validation_status", {}).get(metric) == "missing_inputs"
+            for metric, warning in state.get("data_warnings", {}).items()
+        )
+        and bool(
+            re.search(r"(?:补齐|补录|补充|获取缺失).*(?:数据|工费|成本|输入)", content)
+        )
+    )
 
 
 def missing_deliverables(state: Dict[str, Any]) -> List[str]:
@@ -69,7 +84,9 @@ def missing_deliverables(state: Dict[str, Any]) -> List[str]:
     missing.extend("确认名词：" + term for term in state.get("unresolved_terms", []))
     missing.extend(state.get("query_data_gaps", {}).values())
     for task in state.get("task_plan", []):
-        if task.get("status") != "completed" and explained_backfill_step(state, task.get("content", "")):
+        if task.get("status") != "completed" and explained_backfill_step(
+            state, task.get("content", "")
+        ):
             task["status"] = "completed"
             task["content"] = "已交付数据限制说明（" + task["content"] + "）"
         if task.get("status") in {"pending", "in_progress"}:

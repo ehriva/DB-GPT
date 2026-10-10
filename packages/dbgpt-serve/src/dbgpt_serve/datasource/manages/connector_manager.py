@@ -308,7 +308,6 @@ class ConnectorManager(BaseComponent):
             extConfig = db_config.get("ext_config")
             dbJson = json.loads(extConfig)
             service_name = dbJson.get("service_name", None)
-            sid = (dbJson.get("sid", None),)
             return connect_instance.from_uri_db(  # type: ignore
                 host=host, port=port, user=user, pwd=pwd, service_name=service_name
             )

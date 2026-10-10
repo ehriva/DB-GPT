@@ -52,40 +52,67 @@ def test_report_recursively_rejects_same_session_source_from_old_scope():
     with pytest.raises(ValueError):
         render_results(s, [summary], "报告")
     summary = record_validated_result(
-        s, ["毛利额", "销售额", "毛利率", "missing_input_count"],
-        [[2, 10, 0.2, 0]], source="python", source_result_ids=[source],
+        s,
+        ["毛利额", "销售额", "毛利率", "missing_input_count"],
+        [[2, 10, 0.2, 0]],
+        source="python",
+        source_result_ids=[source],
     )
     with pytest.raises(ValueError, match="源结果"):
         render_results(s, [summary], "报告")
 
 
 @pytest.mark.asyncio
-async def test_python_receives_actual_files_for_multiple_query_sources(tmp_path, monkeypatch):
+async def test_python_receives_actual_files_for_multiple_query_sources(
+    tmp_path, monkeypatch
+):
     from types import SimpleNamespace
+
     from sqlalchemy import create_engine, text
     from sqlalchemy.pool import StaticPool
+
     from dbgpt.configs import model_config
-    from dbgpt_app.openapi.api_v1.tools.sql_query import make_sql_query
     from dbgpt_app.openapi.api_v1.tools.code_interpreter import make_code_interpreter
+    from dbgpt_app.openapi.api_v1.tools.sql_query import make_sql_query
+
     monkeypatch.setattr(model_config, "PILOT_PATH", str(tmp_path))
     monkeypatch.setattr(model_config, "STATIC_MESSAGE_IMG_PATH", str(tmp_path / "img"))
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE ERP销售 (产品编码 TEXT,销售金额 REAL)"))
-        connection.execute(text("CREATE TABLE 材料单价 (产品编码 TEXT,材料成本单价 REAL)"))
+        connection.execute(
+            text("CREATE TABLE 材料单价 (产品编码 TEXT,材料成本单价 REAL)")
+        )
         connection.execute(text("INSERT INTO ERP销售 VALUES ('p',100)"))
         connection.execute(text("INSERT INTO 材料单价 VALUES ('p',10)"))
     s = {"conv_id": "multi-files", "term_datasource": "sales"}
     query = make_sql_query(s, SimpleNamespace(_engine=engine))
-    sales = json.loads(await query("SELECT rowid AS source_sales_row_id,* FROM ERP销售"))
+    sales = json.loads(
+        await query("SELECT rowid AS source_sales_row_id,* FROM ERP销售")
+    )
     cost = json.loads(await query("SELECT * FROM 材料单价"))
     assert sales["success"] and cost["success"]
-    code = "sales=json.load(open(QUERY_RESULTS[" + repr(sales["result_id"]) + "][\"path\"],encoding='utf-8'))\n"
-    code += "cost=json.load(open(QUERY_RESULTS[" + repr(cost["result_id"]) + "][\"path\"],encoding='utf-8'))\n"
-    code += "print(json.dumps({'columns':['check'],'rows':[[sales['rows'][0][2]+cost['rows'][0][1]]]}))"
+    code = (
+        "sales=json.load(open(QUERY_RESULTS["
+        + repr(sales["result_id"])
+        + "][\"path\"],encoding='utf-8'))\n"
+    )
+    code += (
+        "cost=json.load(open(QUERY_RESULTS["
+        + repr(cost["result_id"])
+        + "][\"path\"],encoding='utf-8'))\n"
+    )
+    code += (
+        "print(json.dumps({'columns':['check'],"
+        "'rows':[[sales['rows'][0][2]+cost['rows'][0][1]]]}))"
+    )
     result = json.loads(await make_code_interpreter(s)(code))
     assert result["success"]
-    assert any(snapshot["rows"] == [[110]] for snapshot in s["validated_results"].values())
+    assert any(
+        snapshot["rows"] == [[110]] for snapshot in s["validated_results"].values()
+    )
     engine.dispose()
 
 
@@ -256,17 +283,31 @@ def test_report_checks_python_counts_against_linked_source_rows():
 
 
 @pytest.mark.asyncio
-async def test_python_failure_feedback_exposes_source_column_mapping(tmp_path, monkeypatch):
+async def test_python_failure_feedback_exposes_source_column_mapping(
+    tmp_path, monkeypatch
+):
     from dbgpt.configs import model_config
     from dbgpt_app.openapi.api_v1.tools.code_interpreter import make_code_interpreter
 
     monkeypatch.setattr(model_config, "PILOT_PATH", str(tmp_path))
-    monkeypatch.setattr(model_config, "STATIC_MESSAGE_IMG_PATH", str(tmp_path / "images"))
-    s = {"query_result_path": str(tmp_path / "query_input.json"), "validated_results": {
-        "query_input": {"columns": ["source_sales_row_id", "客户类型", "销售数量", "销售金额"]}}}
-    result = json.loads(await make_code_interpreter(s)("value='外部客户'\nprint(value*2.5)"))
+    monkeypatch.setattr(
+        model_config, "STATIC_MESSAGE_IMG_PATH", str(tmp_path / "images")
+    )
+    s = {
+        "query_result_path": str(tmp_path / "query_input.json"),
+        "validated_results": {
+            "query_input": {
+                "columns": ["source_sales_row_id", "客户类型", "销售数量", "销售金额"]
+            }
+        },
+    }
+    result = json.loads(
+        await make_code_interpreter(s)("value='外部客户'\nprint(value*2.5)")
+    )
     assert not result["success"]
-    feedback = "\n".join(c.get("content", "") for c in result["chunks"] if c["output_type"] == "text")
+    feedback = "\n".join(
+        c.get("content", "") for c in result["chunks"] if c["output_type"] == "text"
+    )
     assert "dict(zip" in feedback and "销售数量" in feedback
 
 

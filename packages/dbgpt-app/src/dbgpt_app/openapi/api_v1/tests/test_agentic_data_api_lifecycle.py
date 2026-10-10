@@ -12,14 +12,29 @@ from dbgpt_app.openapi.api_v1.react_final import AgentFinalAnswer, TaskResult
 
 @pytest.mark.parametrize("database", [None, {"name": "monthly", "type": "sqlite"}])
 def test_history_persists_safe_resource_and_task_requirements(database):
-    requirements = {"requires_report": True, "ratios": [], "analysis_scope": {
-        "database": database, "customer_codes": ["A"], "periods": ["2026.01"],
-        "customer_evidence": "A", "period_evidence": "2026.01"}}
-    payload = json.loads(agentic_data_api._build_react_history_payload(
-        final_content="answer", steps=[], task_plan=[], generated_images=[],
-        sub_agents=[], input_files=[], task_requirements=requirements,
-        resource_context={"database": database},
-    ))
+    requirements = {
+        "requires_report": True,
+        "ratios": [],
+        "analysis_scope": {
+            "database": database,
+            "customer_codes": ["A"],
+            "periods": ["2026.01"],
+            "customer_evidence": "A",
+            "period_evidence": "2026.01",
+        },
+    }
+    payload = json.loads(
+        agentic_data_api._build_react_history_payload(
+            final_content="answer",
+            steps=[],
+            task_plan=[],
+            generated_images=[],
+            sub_agents=[],
+            input_files=[],
+            task_requirements=requirements,
+            resource_context={"database": database},
+        )
+    )
     assert payload["resource_context"] == {"database": database}
     assert payload["task_requirements"] == requirements
 

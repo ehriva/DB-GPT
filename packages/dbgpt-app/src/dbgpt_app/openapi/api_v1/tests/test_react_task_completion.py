@@ -6,31 +6,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
-
-def test_verified_explain_policy_does_not_require_model_invented_data_backfill():
-    from dbgpt_app.openapi.api_v1.react_task import missing_deliverables
-
-    state = {"task_requirements": {"ratios": [{"metric": "毛利率", "unavailable_policy": "explain"}]},
-             "data_warnings": {"毛利率": {"reason": "missing_input"}},
-             "ratio_validation_status": {"毛利率": "missing_inputs"},
-             "task_plan": [{"content": "补齐缺失工费数据", "status": "pending"}]}
-    assert missing_deliverables(state) == []
-    state["task_requirements"]["ratios"][0]["unavailable_policy"] = "require_value"
-    state["task_plan"] = [{"content": "补齐缺失工费数据", "status": "pending"}]
-    assert missing_deliverables(state)
-
-
-def test_user_requested_backfill_is_not_completed_by_a_data_warning():
-    from dbgpt_app.openapi.api_v1.react_task import missing_deliverables
-
-    state = {"original_user_input": "请补齐工费数据再分析毛利率",
-             "task_requirements": {"ratios": [{"metric": "毛利率", "unavailable_policy": "explain"}]},
-             "data_warnings": {"毛利率": {"reason": "missing_input"}},
-             "ratio_validation_status": {"毛利率": "missing_inputs"},
-             "task_plan": [{"content": "补齐缺失工费数据", "status": "pending"}]}
-    assert missing_deliverables(state)
-    assert state["task_plan"][0]["status"] == "pending"
 from sqlalchemy import create_engine, text
 
 from dbgpt.agent import AgentContext, AgentMessage
@@ -56,6 +31,39 @@ from dbgpt_app.openapi.api_v1.tools.sql_query import (
 )
 from dbgpt_app.openapi.api_v1.tools.todowrite import make_todowrite
 from dbgpt_ext.datasource.rdbms.conn_sqlite import SQLiteConnector
+
+
+def test_verified_explain_policy_does_not_require_model_invented_data_backfill():
+    from dbgpt_app.openapi.api_v1.react_task import missing_deliverables
+
+    state = {
+        "task_requirements": {
+            "ratios": [{"metric": "毛利率", "unavailable_policy": "explain"}]
+        },
+        "data_warnings": {"毛利率": {"reason": "missing_input"}},
+        "ratio_validation_status": {"毛利率": "missing_inputs"},
+        "task_plan": [{"content": "补齐缺失工费数据", "status": "pending"}],
+    }
+    assert missing_deliverables(state) == []
+    state["task_requirements"]["ratios"][0]["unavailable_policy"] = "require_value"
+    state["task_plan"] = [{"content": "补齐缺失工费数据", "status": "pending"}]
+    assert missing_deliverables(state)
+
+
+def test_user_requested_backfill_is_not_completed_by_a_data_warning():
+    from dbgpt_app.openapi.api_v1.react_task import missing_deliverables
+
+    state = {
+        "original_user_input": "请补齐工费数据再分析毛利率",
+        "task_requirements": {
+            "ratios": [{"metric": "毛利率", "unavailable_policy": "explain"}]
+        },
+        "data_warnings": {"毛利率": {"reason": "missing_input"}},
+        "ratio_validation_status": {"毛利率": "missing_inputs"},
+        "task_plan": [{"content": "补齐缺失工费数据", "status": "pending"}],
+    }
+    assert missing_deliverables(state)
+    assert state["task_plan"][0]["status"] == "pending"
 
 
 def test_cancelled_required_steps_cannot_report_success():

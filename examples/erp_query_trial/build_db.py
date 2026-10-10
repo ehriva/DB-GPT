@@ -1,16 +1,15 @@
 """Import the five ERP exports into an isolated, traceable SQLite database."""
 
 import argparse
+import json
+import sqlite3
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
-import json
 from pathlib import Path
-import sqlite3
 from typing import Any
 
 from openpyxl import load_workbook
-
 
 FILES = {
     "production_receipts": "2025年生产入库单列表.xlsx",
@@ -92,13 +91,20 @@ def bill_entries(
     return result
 
 
-def add_issue(conn: sqlite3.Connection, kind: str, table: str, row: dict,
-              detail: str) -> None:
-    insert(conn, "data_issues", {
-        "issue_type": kind, "business_table": table,
-        "sheet_id": row.get("sheet_id"), "excel_row": row.get("excel_row"),
-        "detail": detail,
-    })
+def add_issue(
+    conn: sqlite3.Connection, kind: str, table: str, row: dict, detail: str
+) -> None:
+    insert(
+        conn,
+        "data_issues",
+        {
+            "issue_type": kind,
+            "business_table": table,
+            "sheet_id": row.get("sheet_id"),
+            "excel_row": row.get("excel_row"),
+            "detail": detail,
+        },
+    )
 
 
 def production_entries(keys: list, rows: list) -> list[tuple[int, dict]]:
@@ -117,8 +123,9 @@ def production_entries(keys: list, rows: list) -> list[tuple[int, dict]]:
     return result
 
 
-def import_sheet(conn: sqlite3.Connection, path: Path, ws: Any, cached_ws: Any,
-                 header_count: int) -> tuple[int, list, list]:
+def import_sheet(
+    conn: sqlite3.Connection, path: Path, ws: Any, cached_ws: Any, header_count: int
+) -> tuple[int, list, list]:
     # Some ERP exports incorrectly declare A1:A1 as their used range.
     ws.reset_dimensions()
     cached_ws.reset_dimensions()
@@ -132,7 +139,9 @@ def import_sheet(conn: sqlite3.Connection, path: Path, ws: Any, cached_ws: Any,
         for column_index, cell in enumerate(row):
             if cell.data_type == "f":
                 if values[row_index][column_index] is None:
-                    raise ValueError(f"{ws.title}/{cell.coordinate}: missing formula cache")
+                    raise ValueError(
+                        f"{ws.title}/{cell.coordinate}: missing formula cache"
+                    )
                 formula_row[str(column_index + 1)] = cell.value
         formulas.append(formula_row)
     keys = values[0]
@@ -145,20 +154,27 @@ def import_sheet(conn: sqlite3.Connection, path: Path, ws: Any, cached_ws: Any,
     )
     sheet_id = cursor.lastrowid
     for i, (key, label) in enumerate(zip(keys, labels), 1):
-        conn.execute("INSERT INTO source_columns VALUES (?,?,?,?)",
-                     (sheet_id, i, text(key), text(label)))
+        conn.execute(
+            "INSERT INTO source_columns VALUES (?,?,?,?)",
+            (sheet_id, i, text(key), text(label)),
+        )
     rows = values[header_count:]
     for row_number, row in enumerate(rows, header_count + 1):
-        conn.execute("INSERT INTO raw_rows VALUES (?,?,?,?)", (
-            sheet_id, row_number,
-            json.dumps(row, ensure_ascii=False, default=lambda v: v.isoformat()),
-            json.dumps(formulas[row_number - 1], ensure_ascii=False),
-        ))
+        conn.execute(
+            "INSERT INTO raw_rows VALUES (?,?,?,?)",
+            (
+                sheet_id,
+                row_number,
+                json.dumps(row, ensure_ascii=False, default=lambda v: v.isoformat()),
+                json.dumps(formulas[row_number - 1], ensure_ascii=False),
+            ),
+        )
     return sheet_id, keys, rows
 
 
-def import_master(conn: sqlite3.Connection, table: str, sheet_id: int,
-                  keys: list, rows: list) -> None:
+def import_master(
+    conn: sqlite3.Connection, table: str, sheet_id: int, keys: list, rows: list
+) -> None:
     for row_number, row in unpack_rows(keys, rows, 2):
         common = {"sheet_id": sheet_id, "excel_row": row_number}
         if table == "customers":
@@ -168,22 +184,27 @@ def import_master(conn: sqlite3.Connection, table: str, sheet_id: int,
                 short_name=text(row["简称"]),
                 organization=text(row["使用组织"]),
                 customer_group=text(row["客户分组"]),
-                document_status=text(row["单据状态"]), disabled=text(row["禁用状态"]),
+                document_status=text(row["单据状态"]),
+                disabled=text(row["禁用状态"]),
             )
         else:
             common.update(
-                material_code=text(row["编码"]), material_name=text(row["名称"]),
+                material_code=text(row["编码"]),
+                material_name=text(row["名称"]),
                 specification=text(row["规格型号"]),
-                organization=text(row["使用组织"]), base_unit=text(row["基本单位"]),
+                organization=text(row["使用组织"]),
+                base_unit=text(row["基本单位"]),
                 material_group=text(row["物料分组"]),
                 inventory_category=text(row["存货类别"]),
-                document_status=text(row["数据状态"]), disabled=text(row["禁用状态"]),
+                document_status=text(row["数据状态"]),
+                disabled=text(row["禁用状态"]),
             )
         insert(conn, table, common)
 
 
-def import_sales(conn: sqlite3.Connection, table: str, sheet_id: int,
-                 keys: list, rows: list) -> None:
+def import_sales(
+    conn: sqlite3.Connection, table: str, sheet_id: int, keys: list, rows: list
+) -> None:
     order = table == "sales_orders"
     entry_key = "FSaleOrderEntry" if order else "FEntity"
     customer_key = "FCustId" if order else "FCustomerID"
@@ -191,8 +212,10 @@ def import_sales(conn: sqlite3.Connection, table: str, sheet_id: int,
     currency_key = "FSettleCurrId" if order else "FSettleCurrID"
     for row_number, head, row in bill_entries(keys, rows, entry_key):
         record = {
-            "entry_id": text(row[entry_key]), "document_id": text(head[keys[0]]),
-            "bill_no": text(head["FBillNo"]), "bill_date": iso_date(head["FDate"]),
+            "entry_id": text(row[entry_key]),
+            "document_id": text(head[keys[0]]),
+            "bill_no": text(head["FBillNo"]),
+            "bill_date": iso_date(head["FDate"]),
             "customer_code": text(head[customer_key]),
             "customer_name": text(head[customer_key + "#Name"]),
             "sales_org_code": text(head["FSaleOrgId"]),
@@ -209,7 +232,8 @@ def import_sales(conn: sqlite3.Connection, table: str, sheet_id: int,
             "tax_unit_price": number(row["FTaxPrice"]),
             "current_inventory": number(row["FInventoryQty"]),
             "document_status": None,
-            "sheet_id": sheet_id, "excel_row": row_number,
+            "sheet_id": sheet_id,
+            "excel_row": row_number,
         }
         if order:
             record.update(
@@ -226,32 +250,52 @@ def import_sales(conn: sqlite3.Connection, table: str, sheet_id: int,
         insert(conn, table, record)
 
 
-def import_production(conn: sqlite3.Connection, table: str, sheet_id: int,
-                      keys: list, rows: list) -> None:
+def import_production(
+    conn: sqlite3.Connection, table: str, sheet_id: int, keys: list, rows: list
+) -> None:
     names = defaultdict(list)
     for code, name in conn.execute("SELECT customer_code,customer_name FROM customers"):
         names[name].append(code)
-    records = (production_entries(keys, rows) if table == "production_receipts"
-               else unpack_rows(keys, rows, 2))
+    records = (
+        production_entries(keys, rows)
+        if table == "production_receipts"
+        else unpack_rows(keys, rows, 2)
+    )
     for row_number, row in records:
-        common = {"sheet_id": sheet_id, "excel_row": row_number,
-                  "material_code": text(row["物料编码"]),
-                  "material_name": text(row["物料名称"])}
+        common = {
+            "sheet_id": sheet_id,
+            "excel_row": row_number,
+            "material_code": text(row["物料编码"]),
+            "material_name": text(row["物料名称"]),
+        }
         if table == "production_standards":
             if common["material_code"] is None:
-                add_issue(conn, "missing_material_code", table, common,
-                          "原始工时行没有物料编码，仅保留原始行，未生成工时记录")
+                add_issue(
+                    conn,
+                    "missing_material_code",
+                    table,
+                    common,
+                    "原始工时行没有物料编码，仅保留原始行，未生成工时记录",
+                )
                 continue
             numbers = {}
-            for field, key in (("assembly_value", "组装"), ("coating_value", "镀膜"),
-                               ("total_labor_cost", "总工费"),
-                               ("total_labor_minutes", "总工时-分钟")):
+            for field, key in (
+                ("assembly_value", "组装"),
+                ("coating_value", "镀膜"),
+                ("total_labor_cost", "总工费"),
+                ("total_labor_minutes", "总工时-分钟"),
+            ):
                 try:
                     numbers[field] = number(row[key])
                 except (InvalidOperation, ValueError):
                     numbers[field] = None
-                    add_issue(conn, "invalid_numeric", table, common,
-                              f"{key}: {text(row[key])}")
+                    add_issue(
+                        conn,
+                        "invalid_numeric",
+                        table,
+                        common,
+                        f"{key}: {text(row[key])}",
+                    )
             common.update(
                 **numbers,
             )
@@ -259,28 +303,42 @@ def import_production(conn: sqlite3.Connection, table: str, sheet_id: int,
             customer_name = text(row["客户"])
             matches = names[customer_name]
             common.update(
-                bill_no=text(row["单据编号"]), bill_date=iso_date(row["日期"]),
+                bill_no=text(row["单据编号"]),
+                bill_date=iso_date(row["日期"]),
                 customer_name=customer_name,
                 customer_code=matches[0] if len(matches) == 1 else None,
                 terminal_customer_name=text(row["终端客户"]),
-                product_type=text(row["产品类型"]), unit=text(row["单位"]),
-                quantity=number(row["实收数量"]), warehouse_name=text(row["仓库"]),
+                product_type=text(row["产品类型"]),
+                unit=text(row["单位"]),
+                quantity=number(row["实收数量"]),
+                warehouse_name=text(row["仓库"]),
                 length_value=text(row["辅助属性.长度"]),
                 brand_code=text(row["辅助属性.品牌.编码"]),
                 brand_name=text(row["辅助属性.品牌.名称"]),
                 document_status=text(row["单据状态"]),
             )
             if customer_name and len(matches) != 1:
-                add_issue(conn, "customer_name_unresolved", table, common,
-                          "客户名称无法唯一匹配客户主档；未进行模糊匹配")
+                add_issue(
+                    conn,
+                    "customer_name_unresolved",
+                    table,
+                    common,
+                    "客户名称无法唯一匹配客户主档；未进行模糊匹配",
+                )
         insert(conn, table, common)
 
 
 def check_links(conn: sqlite3.Connection) -> None:
-    for table in ("sales_orders", "sales_outbound", "production_receipts",
-                  "production_standards"):
-        for key, master in (("material_code", "materials"),
-                            ("customer_code", "customers")):
+    for table in (
+        "sales_orders",
+        "sales_outbound",
+        "production_receipts",
+        "production_standards",
+    ):
+        for key, master in (
+            ("material_code", "materials"),
+            ("customer_code", "customers"),
+        ):
             if table == "production_standards" and key == "customer_code":
                 continue
             unmatched = conn.execute(
@@ -289,16 +347,25 @@ def check_links(conn: sqlite3.Connection) -> None:
                 f"WHERE t.{key} IS NOT NULL AND m.{key} IS NULL"
             ).fetchall()
             for sheet_id, excel_row, code in unmatched:
-                add_issue(conn, "master_missing_" + key, table,
-                          {"sheet_id": sheet_id, "excel_row": excel_row}, code)
+                add_issue(
+                    conn,
+                    "master_missing_" + key,
+                    table,
+                    {"sheet_id": sheet_id, "excel_row": excel_row},
+                    code,
+                )
     for row in conn.execute(
         "SELECT s.sheet_id,s.excel_row,s.source_order_entry_id "
         "FROM sales_outbound s LEFT JOIN sales_orders o "
         "ON o.entry_id=s.source_order_entry_id WHERE o.entry_id IS NULL"
     ).fetchall():
-        add_issue(conn, "order_link_not_in_export", "sales_outbound",
-                  {"sheet_id": row[0], "excel_row": row[1]},
-                  row[2] or "源订单明细ID缺失")
+        add_issue(
+            conn,
+            "order_link_not_in_export",
+            "sales_outbound",
+            {"sheet_id": row[0], "excel_row": row[1]},
+            row[2] or "源订单明细ID缺失",
+        )
     for row in conn.execute(
         "SELECT s.sheet_id,s.excel_row FROM sales_outbound s "
         "JOIN sales_orders o ON o.entry_id=s.source_order_entry_id "
@@ -307,9 +374,13 @@ def check_links(conn: sqlite3.Connection) -> None:
         "OR s.length_value IS NOT o.length_value "
         "OR s.brand_code IS NOT o.brand_code"
     ).fetchall():
-        add_issue(conn, "order_link_attribute_mismatch", "sales_outbound",
-                  {"sheet_id": row[0], "excel_row": row[1]},
-                  "源订单关联存在，但客户、物料、单位或辅助属性不一致")
+        add_issue(
+            conn,
+            "order_link_attribute_mismatch",
+            "sales_outbound",
+            {"sheet_id": row[0], "excel_row": row[1]},
+            "源订单关联存在，但客户、物料、单位或辅助属性不一致",
+        )
 
 
 def build(source_dir: Path, output: Path) -> dict:
@@ -323,19 +394,29 @@ def build(source_dir: Path, output: Path) -> dict:
     try:
         conn.executescript(Path(__file__).with_name("schema.sql").read_text("utf-8"))
         with conn:
-            for table in ("customers", "materials", "sales_orders",
-                          "sales_outbound", "production_receipts"):
+            for table in (
+                "customers",
+                "materials",
+                "sales_orders",
+                "sales_outbound",
+                "production_receipts",
+            ):
                 path = source_dir / FILES[table]
                 wb = load_workbook(path, read_only=True, data_only=False)
                 cached_wb = load_workbook(path, read_only=True, data_only=True)
                 try:
-                    if len(wb.worksheets) != (2 if table == "production_receipts" else 1):
+                    if len(wb.worksheets) != (
+                        2 if table == "production_receipts" else 1
+                    ):
                         raise ValueError(f"Unexpected worksheet count: {path.name}")
                     for i, ws in enumerate(wb.worksheets):
                         target = "production_standards" if i == 1 else table
                         sheet_id, keys, rows = import_sheet(
-                            conn, path, ws, cached_wb[ws.title],
-                            2 if table.startswith("sales_") else 1
+                            conn,
+                            path,
+                            ws,
+                            cached_wb[ws.title],
+                            2 if table.startswith("sales_") else 1,
                         )
                         if table in ("customers", "materials"):
                             import_master(conn, target, sheet_id, keys, rows)
@@ -352,14 +433,20 @@ def build(source_dir: Path, output: Path) -> dict:
         report = {
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "database": output.name,
-            "counts": {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                       for table in (*FILES, "production_standards", "raw_rows")},
-            "date_ranges": {table: conn.execute(
-                f"SELECT MIN(bill_date),MAX(bill_date) FROM {table}"
-            ).fetchone() for table in
-                ("sales_orders", "sales_outbound", "production_receipts")},
-            "issues": [dict(zip(("type", "table", "count"), row)) for row in
-                       conn.execute("SELECT * FROM v_data_issue_summary")],
+            "counts": {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in (*FILES, "production_standards", "raw_rows")
+            },
+            "date_ranges": {
+                table: conn.execute(
+                    f"SELECT MIN(bill_date),MAX(bill_date) FROM {table}"
+                ).fetchone()
+                for table in ("sales_orders", "sales_outbound", "production_receipts")
+            },
+            "issues": [
+                dict(zip(("type", "table", "count"), row))
+                for row in conn.execute("SELECT * FROM v_data_issue_summary")
+            ],
             "limitations": [
                 "静态导出样本，不是实时ERP；未连接正式数据库",
                 "销售订单/出库导出未提供审核与作废状态，不能判定有效单据",
@@ -381,8 +468,11 @@ def build(source_dir: Path, output: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, required=True)
-    parser.add_argument("--output", type=Path,
-                        default=Path(__file__).parent / "data" / "erp_trial.sqlite")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(__file__).parent / "data" / "erp_trial.sqlite",
+    )
     args = parser.parse_args()
     report = build(args.source_dir, args.output)
     report_path = args.output.with_suffix(".import.json")
