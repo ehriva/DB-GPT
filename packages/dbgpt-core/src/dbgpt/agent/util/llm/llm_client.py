@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import sys
-import traceback
 from typing import Any, Callable, Dict, Optional, Union
 
 from dbgpt.core import LLMClient, ModelOutput, ModelRequestContext
@@ -167,7 +166,7 @@ class AIWrapper:
                 stream_callback,
             )
         except LLMChatError as e:
-            logger.debug(f"{llm_model} generate failed!{str(e)}")
+            logger.debug("LLM generation failed: %s", type(e).__name__)
             raise e
         else:
             pass_filter = filter_func is None or filter_func(
@@ -220,17 +219,14 @@ class AIWrapper:
                 conv_id=conv_id,
             )
         except LLMChatError:
-            logger.exception("generate_text: LLM call failed")
+            logger.error("generate_text: LLM call failed")
             return ""
         return response or ""
 
     def _get_span_metadata(self, payload: Dict) -> Dict:
-        metadata = {k: v for k, v in payload.items()}
-
-        metadata["messages"] = list(
-            map(lambda m: m if isinstance(m, dict) else m.dict(), metadata["messages"])
-        )
-        return metadata
+        return {
+            key: payload.get(key) for key in ("model", "temperature", "max_new_tokens")
+        }
 
     def _llm_messages_convert(self, params):
         gpts_messages = params["messages"]
@@ -261,7 +257,7 @@ class AIWrapper:
             payload["tools"] = params["tools"]
         if params.get("tool_choice") is not None:
             payload["tool_choice"] = params["tool_choice"]
-        logger.info(f"Request: \n{payload}")
+        logger.info("LLM request model=%s", llm_model)
         span = root_tracer.start_span(
             "Agent.llm_client.no_streaming_call",
             metadata=self._get_span_metadata(payload),
@@ -342,18 +338,13 @@ class AIWrapper:
                 print("-" * 80, "\n", flush=True, sep="")
             return model_output
         except Exception as e:
-            logger.error(
-                f"Call LLMClient error, {str(e)}, detail: {traceback.format_exc()}"
-            )
+            logger.error("Call LLMClient error: %s", type(e).__name__)
             raise LLMChatError(original_exception=e) from e
         finally:
             # Capture token/cost/latency from the model output into the
             # observability span so the Overview dashboard shows real data.
             #
-            # IMPORTANT: start from the span's existing metadata (which carries
-            # `messages` — the system prompt + user input sent to the model) and
-            # merge, NOT replace. `Span.end(metadata=...)` REPLACES the whole
-            # dict, so a bare `{"status": ...}` would drop the prompt/messages.
+            # Preserve safe request metadata while adding the existing usage metrics.
             end_meta: Dict[str, Any] = dict(span.metadata)
             end_meta["status"] = "OK"
             if model_output is not None:
@@ -374,5 +365,5 @@ class AIWrapper:
             # handles it; here we just mark the span.
             if sys.exc_info()[1] is not None:
                 end_meta["status"] = "ERROR"
-                end_meta["error"] = str(sys.exc_info()[1])
+                end_meta["error_type"] = type(sys.exc_info()[1]).__name__
             span.end(metadata=end_meta)

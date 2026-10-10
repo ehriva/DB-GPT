@@ -29,10 +29,27 @@ class Terminate(Action[None], BaseTool):
         need_vis_render: bool = True,
         **kwargs,
     ) -> ActionOutput:
+        content = ai_message
+        steps = ReActOutputParser().parse_current_step(
+            self.preserve_math_escapes(ai_message)
+        )
+        if steps:
+            value = steps[0].action_input
+            payload = self.input_payload(value) if isinstance(value, str) else value
+            if not isinstance(payload, dict):
+                raise ValueError("结束工具缺少最终回答参数。")
+            content = self.final_content(payload)
+        elif ai_message.strip().startswith("{"):
+            payload = self.input_payload(ai_message)
+            if isinstance(payload, dict) and any(
+                key in payload for key in ("output", "result", "final_answer")
+            ):
+                content = self.final_content(payload)
+        content = self.final_content({}, content)
         return ActionOutput(
             is_exe_success=True,
             terminate=True,
-            content=ai_message,
+            content=content,
         )
 
     @classmethod
@@ -94,12 +111,58 @@ class Terminate(Action[None], BaseTool):
             ),
         }
 
+    @staticmethod
+    def preserve_math_escapes(value):
+        def preserve_math(match):
+            expression = re.sub(r"(?<!\\)\\(?=[A-Za-z]{2,})", r"\\\\", match.group(2))
+            return match.group(1) + expression + match.group(1)
+
+        return re.sub(r"(\${1,2})(.*?)\1", preserve_math, value, flags=re.DOTALL)
+
+    @staticmethod
+    def input_payload(value):
+        value = Terminate.preserve_math_escapes(value)
+        try:
+            return parse_or_raise_error(value)
+        except (ValueError, TypeError):
+            # A single final-text argument may contain unescaped LaTeX/HTML.
+            match = re.fullmatch(
+                r'\s*\{\s*["\'](output|result|final_answer)["\']\s*:\s*"(.*)"\s*\}\s*',
+                value,
+                flags=re.DOTALL,
+            )
+            if not match:
+                raise
+            text = match.group(2).replace(r"\n", "\n").replace(r"\"", '"')
+            return {match.group(1): text}
+
+    @staticmethod
+    def final_content(values, fallback=None):
+        answer = next(
+            (
+                values[key]
+                for key in ("output", "result", "final_answer")
+                if key in values
+            ),
+            fallback,
+        )
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("结束工具缺少有效的最终回答。")
+        return answer
+
     def execute(self, *args, **kwargs):
-        if "output" in kwargs:
-            return kwargs["output"]
-        if "final_answer" in kwargs:
-            return kwargs["final_answer"]
-        return args[0] if args else "terminate unknown"
+        if (
+            not kwargs
+            and args
+            and isinstance(args[0], str)
+            and args[0].strip().startswith("{")
+        ):
+            payload = self.input_payload(args[0])
+            if isinstance(payload, dict) and any(
+                key in payload for key in ("output", "result", "final_answer")
+            ):
+                return self.final_content(payload)
+        return self.final_content(kwargs, args[0] if args else None)
 
     async def async_execute(self, *args, **kwargs):
         return self.execute(*args, **kwargs)

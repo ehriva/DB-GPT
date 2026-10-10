@@ -94,7 +94,7 @@ _REACT_WRITE_MEMORY_TEMPLATE = """\
 
 
 class ReActAgent(ConversableAgent):
-    max_retry_count: int = 30
+    max_retry_count: Optional[int] = 30
     run_mode: AgentRunMode = AgentRunMode.LOOP
 
     profile: ProfileConfig = ProfileConfig(
@@ -160,7 +160,11 @@ class ReActAgent(ConversableAgent):
                 action_space.append(action.get_action_description())
             # self.actions
         reply_message.context = {
-            "max_steps": self.max_retry_count,
+            "max_steps": (
+                self.max_retry_count
+                if self.max_retry_count is not None
+                else "unlimited"
+            ),
             "action_space": "\n".join(action_space),
             "action_space_names": ", ".join(action_space_names),
             "action_space_simple_desc": "\n".join(action_space_simple_desc),

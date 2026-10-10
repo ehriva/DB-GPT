@@ -17,7 +17,6 @@ from dbgpt.core import LLMClient, ModelMessageRoleType, PromptTemplate
 from dbgpt.util.error_types import LLMChatError
 from dbgpt.util.executor_utils import blocking_func_to_async
 from dbgpt.util.tracer import SpanType, root_tracer
-from dbgpt.util.utils import colored
 
 from ..resource.base import Resource
 from ..util.conv_utils import parse_conv_id
@@ -47,8 +46,8 @@ class ConversableAgent(Role, Agent):
     llm_config: Optional[LLMConfig] = None
     bind_prompt: Optional[PromptTemplate] = None
     run_mode: Optional[AgentRunMode] = Field(default=None, description="Run mode")
-    max_retry_count: int = 3
-    max_timeout: int = 600
+    max_retry_count: Optional[int] = 3
+    max_timeout: Optional[int] = 600
     llm_client: Optional[AIWrapper] = None
     # 确认当前Agent是否需要进行流式输出
     stream_out: bool = True
@@ -533,9 +532,13 @@ class ConversableAgent(Role, Agent):
             fail_reason = None
             current_retry_counter = 0
             start_time = time.time()
-            is_success = True
+            is_success = False
+            termination_reason = "step_limit"
             observation = received_message.content or ""
-            while current_retry_counter < self.max_retry_count:
+            while (
+                self.max_retry_count is None
+                or current_retry_counter < self.max_retry_count
+            ):
                 if current_retry_counter > 0:
                     a_reply_message: Optional[
                         AgentMessage
@@ -686,13 +689,6 @@ class ConversableAgent(Role, Agent):
                     span.metadata["action_report"] = (
                         act_out.to_dict() if act_out else None
                     )
-                    await _emit_stream(
-                        "act",
-                        {
-                            "round": current_retry_counter + 1,
-                            "action_output": act_out.to_dict() if act_out else None,
-                        },
-                    )
 
                 with root_tracer.start_span(
                     "agent.generate_reply.verify",
@@ -706,9 +702,16 @@ class ConversableAgent(Role, Agent):
                     check_pass, reason = await self.verify(
                         reply_message, sender, reviewer
                     )
-                    is_success = check_pass
                     span.metadata["check_pass"] = check_pass
                     span.metadata["reason"] = reason
+
+                await _emit_stream(
+                    "act",
+                    {
+                        "round": current_retry_counter + 1,
+                        "action_output": act_out.to_dict() if act_out else None,
+                    },
+                )
 
                 question: str = received_message.content or ""
                 ai_message: str = llm_reply or ""
@@ -716,6 +719,7 @@ class ConversableAgent(Role, Agent):
                 if not check_pass:
                     if not act_out.have_retry:
                         logger.warning("No retry available!")
+                        termination_reason = "tool_failure"
                         break
                     fail_reason = reason
                     observation = fail_reason
@@ -729,6 +733,7 @@ class ConversableAgent(Role, Agent):
                     )
                 else:
                     # Successful reply
+                    fail_reason = None
                     observation = act_out.observations
                     await self.write_memories(
                         question=question,
@@ -738,25 +743,38 @@ class ConversableAgent(Role, Agent):
                         current_retry_counter=current_retry_counter,
                     )
                     if self.run_mode != AgentRunMode.LOOP or act_out.terminate:
+                        is_success = True
+                        termination_reason = "completed"
                         logger.debug(f"Agent {self.name} reply success!{reply_message}")
                         break
                 time_cost = time.time() - start_time
-                if time_cost > self.max_timeout:
+                if self.max_timeout is not None and time_cost > self.max_timeout:
                     logger.warning(
                         f"Agent {self.name} run time out!{time_cost} > "
                         f"{self.max_timeout}"
                     )
+                    termination_reason = "timeout"
                     break
 
                 # Continue to run the next round
                 current_retry_counter += 1
                 # Send error messages and issue new problem-solving instructions
-                if current_retry_counter < self.max_retry_count:
+                if (
+                    self.max_retry_count is None
+                    or current_retry_counter < self.max_retry_count
+                ):
                     await self.send(
                         reply_message, sender, reviewer, request_reply=False
                     )
 
             reply_message.success = is_success
+            reply_message.context = {
+                **reply_message.get_dict_context(),
+                "termination_reason": reply_message.get_dict_context().get(
+                    "termination_reason", termination_reason
+                ),
+                "failure_reason": fail_reason,
+            }
             # 6.final message adjustment
             await self.adjust_final_message(is_success, reply_message)
             return reply_message
@@ -765,6 +783,7 @@ class ConversableAgent(Role, Agent):
             logger.exception("Generate reply exception!")
             err_message = AgentMessage(content=str(e))
             err_message.success = False
+            err_message.context = {"termination_reason": "runtime_error"}
             return err_message
         finally:
             if reply_message:
@@ -1046,44 +1065,11 @@ class ConversableAgent(Role, Agent):
             return True
 
     def _print_received_message(self, message: AgentMessage, sender: Agent):
-        # print the message received
-        print("\n", "-" * 80, flush=True, sep="")
-        _print_name = self.name if self.name else self.role
-        print(
-            colored(
-                sender.name if sender.name else sender.role,
-                "yellow",
-            ),
-            "(to",
-            f"{_print_name})-[{message.model_name or ''}]:\n",
-            flush=True,
+        logger.info(
+            "agent_message_received model=%s action=%s",
+            message.model_name,
+            message.action_report.action if message.action_report else None,
         )
-
-        content = json.dumps(message.content, ensure_ascii=False)
-        if content is not None:
-            print(content, flush=True)
-
-        review_info = message.review_info
-        if review_info:
-            name = sender.name if sender.name else sender.role
-            pass_msg = "Pass" if review_info.approve else "Reject"
-            review_msg = f"{pass_msg}({review_info.comments})"
-            approve_print = f">>>>>>>>{name} Review info: \n{review_msg}"
-            print(colored(approve_print, "green"), flush=True)
-
-        action_report = message.action_report
-        if action_report:
-            name = sender.name if sender.name else sender.role
-            action_msg = (
-                "execution succeeded"
-                if action_report.is_exe_success
-                else "execution failed"
-            )
-            action_report_msg = f"{action_msg},\n{action_report.content}"
-            action_print = f">>>>>>>>{name} Action report: \n{action_report_msg}"
-            print(colored(action_print, "blue"), flush=True)
-
-        print("\n", "-" * 80, flush=True, sep="")
 
     async def _a_process_received_message(self, message: AgentMessage, sender: Agent):
         valid = await self._a_append_message(message, None, sender)
