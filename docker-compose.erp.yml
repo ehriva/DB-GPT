@@ -1,0 +1,58 @@
+services:
+  erp:
+    build:
+      context: .
+      dockerfile: docker/erp/Dockerfile
+    image: dbgpt-erp:local
+    environment:
+      LONGCAT_API_KEY: ${LONGCAT_API_KEY:?Set LONGCAT_API_KEY in the root .env file}
+      DBGPT_LANG: zh
+    ports:
+      - "127.0.0.1:${DBGPT_ERP_PORT:-5670}:5670"
+    volumes:
+      - type: bind
+        source: ./configs/dbgpt-proxy-deepseek.toml
+        target: /seed/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./pilot/meta_data
+        target: /seed/meta_data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./models/Qwen3-Embedding-0.6B
+        target: /app/models/Qwen3-Embedding-0.6B
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./examples/erp_query_trial/data
+        target: /erp
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./outputs/monthly_sales_cost
+        target: /data/monthly_sales_cost
+        read_only: true
+        bind:
+          create_host_path: false
+      - ./pilot/data:/app/pilot/data
+      - ./pilot/message:/app/pilot/message
+      - ./pilot/docker_tmp:/app/pilot/tmp
+      - erp-metadata:/app/erp-state
+      - erp-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5670/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  erp-metadata:
+  erp-logs:
