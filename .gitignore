@@ -212,4 +212,22 @@ test_docs
 .superpowers/
 openspec/
 docs/superpowers/
+!docker/erp/.env.example
 .gstack/
+
+# Local agent tooling & process artifacts
+.pi/
+.mimosa/
+.codegraph/
+.playwright-cli/
+.workbuddy/
+.zcodeignore
+.zcode/
+sites/
+outputs/
+pilot/docker_tmp/
+
+# Local repair-process notes (kept on disk for traceability, not part of the repo)
+notes.md
+task_plan.md
+repair_report.md
