@@ -176,27 +176,44 @@ class ConnectConfigDao(BaseDao):
         """Update db connect info."""
         old_db_conf = self.get_db_config(db_name)
         if old_db_conf:
+            session = self.get_raw_session()
             try:
-                session = self.get_raw_session()
                 if not db_path:
                     update_statement = text(
-                        f"UPDATE connect_config set db_type='{db_type}', "
-                        f"db_host='{db_host}', db_port={db_port}, db_user='{db_user}', "
-                        f"db_pwd='{db_pwd}', comment='{comment}' where "
-                        f"db_name='{db_name}'"
+                        "UPDATE connect_config SET db_type=:db_type, "
+                        "db_host=:db_host, db_port=:db_port, db_user=:db_user, "
+                        "db_pwd=:db_pwd, comment=:comment WHERE db_name=:db_name"
+                    )
+                    values = dict(
+                        db_type=db_type,
+                        db_host=db_host,
+                        db_port=db_port,
+                        db_user=db_user,
+                        db_pwd=db_pwd,
+                        comment=comment,
+                        db_name=db_name,
                     )
                 else:
                     update_statement = text(
-                        f"UPDATE connect_config set db_type='{db_type}', "
-                        f"db_path='{db_path}', comment='{comment}' where "
-                        f"db_name='{db_name}'"
+                        "UPDATE connect_config SET db_type=:db_type, "
+                        "db_path=:db_path, comment=:comment WHERE db_name=:db_name"
                     )
-                session.execute(update_statement)
+                    values = dict(
+                        db_type=db_type,
+                        db_path=db_path,
+                        comment=comment,
+                        db_name=db_name,
+                    )
+                result = session.execute(update_statement, values)
+                if result.rowcount != 1:
+                    raise ValueError("数据库连接更新未匹配唯一记录。")
                 session.commit()
+                return True
+            except Exception:
+                session.rollback()
+                raise
+            finally:
                 session.close()
-            except Exception as e:
-                logger.warning("edit db connect info error！" + str(e))
-            return True
         raise ValueError(f"{db_name} not have config info!")
 
     def get_db_config(self, db_name):

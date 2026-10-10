@@ -296,6 +296,8 @@ class ConnectorManager(BaseComponent):
         connect_instance = self.get_cls_by_dbtype(db_type.value())
         if db_type.is_file_db():
             db_path = db_config.get("db_path")
+            if db_type.value() == "sqlite":
+                return connect_instance.from_existing_file(db_path)
             return connect_instance.from_file_path(db_path)  # type: ignore
         elif db_type.value() == "oracle":
             logger.info("-------------Oracle Datasource------------")
@@ -386,6 +388,8 @@ class ConnectorManager(BaseComponent):
             connect_instance = self.get_cls_by_dbtype(db_type.value())
             if db_type.is_file_db():
                 db_path = db_info.file_path
+                if db_type.value() == "sqlite":
+                    return connect_instance.from_existing_file(db_path)
                 return connect_instance.from_file_path(db_path)  # type: ignore
             else:
                 db_name = db_info.db_name
@@ -443,16 +447,25 @@ class ConnectorManager(BaseComponent):
     )
     def edit_db(self, db_info: DBConfig):
         """Edit db connect info."""
-        return self.storage.update_db_info(
-            db_info.db_name,
-            db_info.db_type,
-            db_info.file_path,
-            db_info.db_host,
-            db_info.db_port,
-            db_info.db_user,
-            db_info.db_pwd,
-            db_info.comment,
-        )
+        if db_info.db_type == "sqlite":
+            connector = self.get_cls_by_dbtype("sqlite").from_existing_file(
+                db_info.file_path
+            )
+            self._dispose_connector(connector)
+        with self._get_connector_creation_lock(db_info.db_name):
+            result = self.storage.update_db_info(
+                db_info.db_name,
+                db_info.db_type,
+                db_info.file_path,
+                db_info.db_host,
+                db_info.db_port,
+                db_info.db_user,
+                db_info.db_pwd,
+                db_info.comment,
+            )
+            if result:
+                self.invalidate_connector(db_info.db_name)
+            return result
 
     async def async_db_summary_embedding(self, db_name, db_type):
         """Async db summary embedding."""

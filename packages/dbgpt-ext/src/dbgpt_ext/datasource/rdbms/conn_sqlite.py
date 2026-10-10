@@ -2,9 +2,14 @@
 
 import dataclasses
 import logging
+import ntpath
 import os
+import re
+import sys
 import tempfile
+from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple, Type
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from sqlalchemy import create_engine, text
 
@@ -88,7 +93,33 @@ class SQLiteConnector(RDBMSConnector):
         _engine_args = {
             "connect_args": {"check_same_thread": parameters.check_same_thread}
         }
-        return cls(create_engine(f"sqlite:///{parameters.path}", **_engine_args))
+        return cls.from_existing_file(parameters.path, engine_args=_engine_args)
+
+    @classmethod
+    def from_existing_file(cls, file_path: str, engine_args=None, **kwargs):
+        """Connect an existing datasource without implicit database creation."""
+        if not isinstance(file_path, str) or not file_path:
+            raise ValueError("SQLite 数据源文件路径不能为空。")
+        args = dict(engine_args or {})
+        args.setdefault("connect_args", {"check_same_thread": False})
+        if file_path == ":memory:":
+            return cls(create_engine("sqlite:///:memory:", **args), **kwargs)
+        uri = urlsplit(file_path) if file_path.startswith("file:") else None
+        path_text = unquote(uri.path) if uri else file_path
+        if sys.platform == "win32" and re.match(r"^/[A-Za-z]:/", path_text):
+            path_text = path_text[1:]
+        if sys.platform != "win32" and ntpath.splitdrive(path_text)[0]:
+            raise ValueError(
+                "Linux 容器不能使用 Windows 绝对路径，请使用容器挂载路径。"
+            )
+        path = Path(path_text)
+        if not path.is_file():
+            raise FileNotFoundError("SQLite 数据源文件不存在，请检查文件和挂载路径。")
+        query = parse_qs(uri.query) if uri else {}
+        query.setdefault("mode", ["rw"])
+        query["uri"] = ["true"]
+        engine_path = path.resolve().as_uri() + "?" + urlencode(query, doseq=True)
+        return cls(create_engine("sqlite:///" + engine_path, **args), **kwargs)
 
     @classmethod
     def from_file_path(
