@@ -7,7 +7,46 @@ from types import SimpleNamespace
 import pytest
 
 from dbgpt_app.openapi.api_v1 import agentic_data_api
-from dbgpt_app.openapi.api_v1.react_final import AgentFinalAnswer
+from dbgpt_app.openapi.api_v1.react_final import AgentFinalAnswer, TaskResult
+
+
+@pytest.mark.parametrize("database", [None, {"name": "monthly", "type": "sqlite"}])
+def test_history_persists_safe_resource_and_task_requirements(database):
+    requirements = {"requires_report": True, "ratios": [], "analysis_scope": {
+        "database": database, "customer_codes": ["A"], "periods": ["2026.01"],
+        "customer_evidence": "A", "period_evidence": "2026.01"}}
+    payload = json.loads(agentic_data_api._build_react_history_payload(
+        final_content="answer", steps=[], task_plan=[], generated_images=[],
+        sub_agents=[], input_files=[], task_requirements=requirements,
+        resource_context={"database": database},
+    ))
+    assert payload["resource_context"] == {"database": database}
+    assert payload["task_requirements"] == requirements
+
+
+def test_outcome_is_persisted_and_sent_independently_of_stream_done():
+    captured = []
+    storage = SimpleNamespace(
+        add_view_message=captured.append,
+        end_current_round=lambda: None,
+        save_to_storage=lambda: None,
+    )
+    result = TaskResult("incomplete", "no_progress", ("HTML report",))
+    history = agentic_data_api._build_react_history_payload(
+        final_content="未完成",
+        steps=[],
+        task_plan=[],
+        generated_images=[],
+        sub_agents=[],
+        input_files=[],
+        task_result=result,
+    )
+    final, done = agentic_data_api._react_terminal_events(
+        storage, history, AgentFinalAnswer("未完成", task_result=result)
+    )
+    assert json.loads(captured[0])["task_result"] == result.to_dict()
+    assert _decode_sse_event(final)["task_result"] == result.to_dict()
+    assert _decode_sse_event(done) == {"type": "done"}
 
 
 def _decode_sse_event(event: str):
@@ -57,7 +96,9 @@ async def test_closing_stream_cancels_and_awaits_agent_task(monkeypatch) -> None
         finally:
             task_finished.set()
 
-    async def _fake_stream_impl(dialogue, tool_mode="full", agent_task_holder=None):
+    async def _fake_stream_impl(
+        dialogue, tool_mode="full", agent_task_holder=None, attachment_ctx=None
+    ):
         del dialogue, tool_mode
         task = asyncio.create_task(_agent_work())
         created_tasks.append(task)
@@ -87,7 +128,9 @@ async def test_closing_stream_cancels_and_awaits_agent_task(monkeypatch) -> None
 async def test_runtime_failure_emits_structured_final_and_done(
     monkeypatch, caplog
 ) -> None:
-    async def _failing_stream_impl(dialogue, tool_mode="full", agent_task_holder=None):
+    async def _failing_stream_impl(
+        dialogue, tool_mode="full", agent_task_holder=None, attachment_ctx=None
+    ):
         del dialogue, tool_mode, agent_task_holder
         if False:
             yield ""
@@ -108,8 +151,13 @@ async def test_runtime_failure_emits_structured_final_and_done(
         {
             "type": "final",
             "protocol_version": 2,
-            "content": "抱歉，回答生成过程中发生错误，请重试。",
+            "content": "执行发生错误，任务未完成，请重试。",
             "citations": [],
+            "task_result": {
+                "status": "failed",
+                "reason": "runtime_error",
+                "missing": [],
+            },
         },
         {"type": "done"},
     ]
@@ -119,7 +167,7 @@ async def test_runtime_failure_emits_structured_final_and_done(
 @pytest.mark.asyncio
 async def test_runtime_failure_does_not_duplicate_a_final_event(monkeypatch) -> None:
     async def _partially_failing_stream_impl(
-        dialogue, tool_mode="full", agent_task_holder=None
+        dialogue, tool_mode="full", agent_task_holder=None, attachment_ctx=None
     ):
         del dialogue, tool_mode, agent_task_holder
         yield agentic_data_api._sse_event(
@@ -157,7 +205,9 @@ async def test_response_disconnect_closes_stream_and_agent_task(monkeypatch) -> 
         finally:
             task_finished.set()
 
-    async def _fake_stream_impl(dialogue, tool_mode="full", agent_task_holder=None):
+    async def _fake_stream_impl(
+        dialogue, tool_mode="full", agent_task_holder=None, attachment_ctx=None
+    ):
         del dialogue, tool_mode
         task = asyncio.create_task(_agent_work())
         created_tasks.append(task)

@@ -17,6 +17,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dbgpt.agent.resource.tool.base import tool
 
+from .query_quality import (
+    _ratio_definitions,
+    ratio_delivery_hint,
+    validate_python_ratio_output,
+    query_result_catalog,
+)
+from .report_rendering import record_validated_result
+
 logger = logging.getLogger(__name__)
 
 EXECUTION_TIMEOUT_SECONDS = 60
@@ -46,6 +54,11 @@ async def _run_python_file(
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            proc.kill()
+        await proc.wait()
+        raise
     except asyncio.TimeoutError:
         try:
             proc.kill()
@@ -107,9 +120,19 @@ def make_code_interpreter(react_state: Dict[str, Any]):
     @tool(
         description=(
             "Execute Python code for data analysis and computation. "
+            "For ratios based on queried data, print final JSON with columns and rows "
+            "including the same-named numerator, denominator, ratio, and "
+            "missing_input_count. "
             "Supports pandas, numpy, matplotlib, json, os, etc. "
             "Use this tool when you need to run Python code to process data, "
             "generate charts, or perform calculations. "
+            "Each call is independent; reload files every time. Database query "
+            "results are in QUERY_RESULT_PATH (JSON columns/rows); metadata is "
+            "also in QUERY_RESULTS, keyed by actual result_id with path/columns/tables. "
+            "Use json.load(open(QUERY_RESULTS[result_id]['path'],encoding='utf-8')) "
+            "for multiple SQL sources; do not invent filenames. "
+            "in DATABASE_PROFILE_PATH. _run.py is your current script, not a "
+            "database connection or data file. "
             'Parameters: {{"code": "python code string"}}'
         )
     )
@@ -149,6 +172,9 @@ def make_code_interpreter(react_state: Dict[str, Any]):
             "os.makedirs(PLOT_DIR, exist_ok=True)",
             'FILE_PATH = os.environ.get("FILE_PATH") or None',
             'FILES_JSON = os.environ.get("FILES_JSON") or None',
+            'QUERY_RESULT_PATH = os.environ.get("QUERY_RESULT_PATH") or None',
+            'QUERY_RESULTS = json.loads(os.environ.get("QUERY_RESULTS_JSON") or "{}")',
+            'DATABASE_PROFILE_PATH = os.environ.get("DATABASE_PROFILE_PATH") or None',
         ]
         preamble = "\n".join(preamble_lines) + "\n"
         full_code = preamble + code
@@ -184,6 +210,8 @@ def make_code_interpreter(react_state: Dict[str, Any]):
                 )
 
         output_text = ""
+        metric_error = None
+        returncode = None
         try:
             tmp_path = os.path.join(work_dir, "_run.py")
             with open(tmp_path, "w", encoding="utf-8") as tmp:
@@ -196,6 +224,13 @@ def make_code_interpreter(react_state: Dict[str, Any]):
                     work_dir=work_dir,
                     file_path=react_state.get("file_path"),
                     files_json_path=react_state.get("files_json_path"),
+                    extra={
+                        "QUERY_RESULT_PATH": react_state.get("query_result_path", ""),
+                        "QUERY_RESULTS_JSON": json.dumps(query_result_catalog(react_state), ensure_ascii=False),
+                        "DATABASE_PROFILE_PATH": react_state.get(
+                            "database_profile_path", ""
+                        ),
+                    },
                 ),
                 timeout=EXECUTION_TIMEOUT_SECONDS,
             )
@@ -215,6 +250,99 @@ def make_code_interpreter(react_state: Dict[str, Any]):
                 )
         except Exception as e:
             output_text = f"Execution error: {e}"
+
+        if returncode not in (0, None) and react_state.get("query_result_path"):
+            source_schemas = {
+                rid: snapshot["columns"]
+                for rid, snapshot in react_state.get("validated_results", {}).items()
+                if rid in code
+                or rid
+                == os.path.splitext(os.path.basename(react_state["query_result_path"]))[
+                    0
+                ]
+            }
+            output_text += (
+                "\n当前查询JSON列顺序："
+                + json.dumps(source_schemas, ensure_ascii=False)
+                + "\n不要假定row[8]/row[10]等固定位置；source_sales_row_id会改变SELECT *的列位置。"
+                "使用records=[dict(zip(data['columns'],row)) for row in data['rows']]，"
+                "销售行使用r['销售数量']、r['销售金额']、r['期间']、r['产品编码']；"
+                "成本同样按列名读取。sql_query是独立工具，不能在Python中直接调用。"
+                "\n实际可用来源（从QUERY_RESULTS读取path，并在最终JSON的source_result_ids引用这些ID）："
+                + json.dumps(query_result_catalog(react_state), ensure_ascii=False)
+            )
+        if returncode == 0:
+            structured = None
+            for candidate in [output_text.strip(), *reversed(output_text.splitlines())]:
+                try:
+                    candidate_payload = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    isinstance(candidate_payload, dict)
+                    and {"columns", "rows"} <= candidate_payload.keys()
+                ):
+                    structured = candidate_payload
+                    break
+            source_ids = structured.get("source_result_ids", []) if structured else []
+            if not source_ids and react_state.get("query_result_path"):
+                from pathlib import Path
+
+                source_ids = [Path(react_state["query_result_path"]).stem]
+            needs_source = (
+                structured is not None
+                and react_state.get("term_datasource")
+                and _ratio_definitions(react_state)
+            )
+            sources = react_state.get("validated_results", {})
+            if needs_source and (
+                not isinstance(source_ids, list)
+                or not source_ids
+                or any(
+                    not isinstance(rid, str)
+                    or rid not in sources
+                    or sources[rid].get("conv_id") != react_state.get("conv_id")
+                    or sources[rid].get("database")
+                    != react_state.get("term_datasource", "")
+                    or sources[rid].get("source") != "sql"
+                    or not sources[rid].get("sql_sources")
+                    for rid in source_ids
+                )
+            ):
+                metric_error = "数据库财务结果必须引用当前任务真实查询的source_result_ids；没有源数据的常数不能注册为已验证事实。请先用sql_query取得真实源数据。"
+                for metric, _, _ in _ratio_definitions(react_state):
+                    react_state.setdefault("query_data_gaps", {})[metric] = (
+                        "该指标的数据来源尚未通过校验。"
+                    )
+            else:
+                metric_error = validate_python_ratio_output(react_state, output_text)
+            if metric_error:
+                output_text += "\n[结果校验未通过] " + metric_error
+            else:
+                for candidate in [
+                    output_text.strip(),
+                    *reversed(output_text.splitlines()),
+                ]:
+                    try:
+                        payload = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        continue
+                    if (
+                        isinstance(payload, dict)
+                        and {"columns", "rows"} <= payload.keys()
+                    ):
+                        result_id = record_validated_result(
+                            react_state,
+                            payload["columns"],
+                            payload["rows"],
+                            source="python",
+                            source_result_ids=source_ids,
+                        )
+                        output_text += f"\n已验证结果result_id={result_id}；财务报告通过result_ids引用。"
+                        break
+            hint = ratio_delivery_hint(react_state)
+            if hint:
+                output_text += "\n" + hint
 
         chunks: List[Dict[str, Any]] = [
             {"output_type": "code", "content": code.strip()},
@@ -274,6 +402,9 @@ def make_code_interpreter(react_state: Dict[str, Any]):
             )
             chunks.append({"output_type": "text", "content": img_summary})
 
-        return json.dumps({"chunks": chunks}, ensure_ascii=False)
+        return json.dumps(
+            {"success": returncode == 0 and not metric_error, "chunks": chunks},
+            ensure_ascii=False,
+        )
 
     return code_interpreter

@@ -6,6 +6,7 @@ from dbgpt.storage.chat_history.chat_history_db import (
     ChatHistoryMessageEntity,
 )
 from dbgpt_app.openapi.api_v1.feedback.feed_back_db import ChatFeedBackEntity
+from dbgpt_app.openapi.api_v1.terms.store import TermEntity
 from dbgpt_app.share.models import ShareLinkEntity
 from dbgpt_serve.agent.app.recommend_question.recommend_question import (
     RecommendQuestionEntity,
@@ -24,6 +25,7 @@ from dbgpt_serve.rag.models.models import KnowledgeSpaceEntity
 from dbgpt_serve.session_file.models.models import SessionFileEntity
 
 _MODELS = [
+    TermEntity,
     PluginHubEntity,
     FileServeEntity,
     MyPluginEntity,

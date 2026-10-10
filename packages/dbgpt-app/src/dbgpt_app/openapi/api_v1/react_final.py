@@ -5,7 +5,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 FINAL_PROTOCOL_VERSION = 2
 MAX_CITATIONS = 10
@@ -64,17 +64,37 @@ class AgentCitation:
 
 
 @dataclass(frozen=True)
+class TaskResult:
+    """Task outcome, independent of stream and individual tool completion."""
+
+    status: Literal["succeeded", "incomplete", "failed", "cancelled"]
+    reason: str
+    missing: Tuple[str, ...] = ()
+    warnings: Tuple[Dict[str, Any], ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "reason": self.reason,
+            "missing": list(self.missing),
+            **({"warnings": list(self.warnings)} if self.warnings else {}),
+        }
+
+
+@dataclass(frozen=True)
 class AgentFinalAnswer:
     """Pure final content plus independently rendered citations."""
 
     content: str
     citations: Tuple[AgentCitation, ...] = ()
+    task_result: Optional[TaskResult] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize fields shared by SSE and conversation history."""
         return {
             "content": self.content,
             "citations": [citation.to_dict() for citation in self.citations],
+            **({"task_result": self.task_result.to_dict()} if self.task_result else {}),
         }
 
     def to_sse_payload(self) -> Dict[str, Any]:
@@ -152,7 +172,9 @@ class FinalAnswerAssembler:
         for draft in drafts:
             self._append(draft)
 
-    def finalize(self, content: Any) -> AgentFinalAnswer:
+    def finalize(
+        self, content: Any, task_result: Optional[TaskResult] = None
+    ) -> AgentFinalAnswer:
         """Build a final answer whose content never contains legacy metadata."""
         citations = tuple(
             AgentCitation(
@@ -169,6 +191,7 @@ class FinalAnswerAssembler:
         return AgentFinalAnswer(
             content=strip_legacy_references(content),
             citations=citations,
+            task_result=task_result,
         )
 
     def _append(self, draft: _CitationDraft) -> None:

@@ -1,7 +1,7 @@
 """todowrite tool — maintain a session-level structured task list."""
 
 import json
-from typing import Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from dbgpt.agent.resource.tool.base import tool
 
@@ -9,6 +9,7 @@ from dbgpt.agent.resource.tool.base import tool
 def make_todowrite(
     todo_list: List[Dict[str, str]],
     stream_callback: Callable,
+    task_state: Optional[Dict[str, Any]] = None,
 ):
     """Return a ``todowrite`` FunctionTool that mutates ``todo_list`` in-place."""
 
@@ -56,6 +57,14 @@ def make_todowrite(
                 ensure_ascii=False,
             )
 
+        if task_state is not None:
+            cancelled = task_state.setdefault("cancelled_required_steps", [])
+            for item in parsed:
+                name = item["content"]
+                if item["status"] == "cancelled" and name not in cancelled:
+                    cancelled.append(name)
+                elif item["status"] == "completed" and name in cancelled:
+                    cancelled.remove(name)
         todo_list.clear()
         todo_list.extend(parsed)
 

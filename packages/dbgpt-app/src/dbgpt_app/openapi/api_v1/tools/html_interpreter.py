@@ -4,10 +4,14 @@ import json
 import logging
 import os
 import re
+from html import unescape
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import quote
 
 from dbgpt.agent.resource.tool.base import tool
+from .query_quality import _ratio_definitions, ratio_delivery_hint
+from .report_rendering import render_results
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +20,12 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
     @tool(
         description=(
             "将 HTML 渲染为可交互的网页报告，这是向用户展示网页报告的唯一方式。"
-            "【一次性】一次调用即可把【完整】报告渲染出来；同一份报告【禁止】"
-            "重复调用本工具，渲染成功后若目标已达成请直接 terminate。"
-            "【默认用法】直接传入完整的 HTML 字符串："
+            "传入完整报告；若检查失败，请修正缺失项后重新调用。"
+            "报告生成成功且全部目标达成后才可 terminate。"
+            "当前任务要求计算比率的财务报告必须使用result_ids引用sql_query/code_interpreter返回的已验证结果。"
+            '调用 {"result_ids":["实际result_id"],"title":"报告标题"}，系统渲染数据与事实。'
+            "此模式不得传入自由HTML、模板或文件补写数字；缺失时同时选择真实销售缺失明细结果。"
+            "【仅非财务报告使用以下通用模式】直接传入完整的 HTML 字符串："
             '{"html": "<html>...</html>", "title": "报告标题"}。'
             "你需要自己生成完整的 HTML 代码"
             "（包含 <!DOCTYPE html>、<html>、<head>、<body> 等），"
@@ -42,11 +49,27 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
         file_path: str = "",
         template_path: str = "",
         data: dict | str = None,
+        result_ids: List[str] = None,
     ) -> str:
         """Render HTML as an interactive web report."""
         from dbgpt.configs.model_config import STATIC_MESSAGE_IMG_PATH
 
+        react_state.pop("rendered_report", None)
         skills_path = Path(skills_dir).expanduser().resolve()
+        factual_summary = None
+        if _ratio_definitions(react_state) or result_ids is not None:
+            try:
+                if html or file_path or template_path or data:
+                    raise ValueError("财务报告只能通过result_ids生成，不能传入自由HTML或模板事实。")
+                html, factual_summary = render_results(react_state, result_ids, title)
+            except (ValueError, TypeError, KeyError) as error:
+                available = {rid: result["columns"] for rid, result in react_state.get("validated_results", {}).items()}
+                feedback = (str(error) + "\n当前任务可用result_ids及列：" + json.dumps(available, ensure_ascii=False)
+                            + "\n财务模式仅传result_ids和title，html保持空；需要同一范围的完整比率结果和真实缺失明细。"
+                            + ("\n" + ratio_delivery_hint(react_state) if ratio_delivery_hint(react_state) else ""))
+                return json.dumps({"success": False, "error": feedback, "chunks": [
+                    {"output_type": "text", "content": feedback},
+                ]}, ensure_ascii=False)
 
         # ── Mode 1: template_path + data ──
         if template_path and template_path.strip():
@@ -57,18 +80,20 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
             except ValueError:
                 return json.dumps(
                     {
+                        "success": False,
                         "chunks": [
                             {
                                 "output_type": "text",
                                 "content": f"Invalid template_path: {tp}",
                             }
-                        ]
+                        ],
                     },
                     ensure_ascii=False,
                 )
             if not target.is_file():
                 return json.dumps(
                     {
+                        "success": False,
                         "chunks": [
                             {
                                 "output_type": "text",
@@ -80,7 +105,7 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
                                     '{"html": "<html>...</html>", "title": "title"}.'
                                 ),
                             }
-                        ]
+                        ],
                     },
                     ensure_ascii=False,
                 )
@@ -89,12 +114,13 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
             except Exception as e:
                 return json.dumps(
                     {
+                        "success": False,
                         "chunks": [
                             {
                                 "output_type": "text",
                                 "content": f"Error reading template: {e}",
                             }
-                        ]
+                        ],
                     },
                     ensure_ascii=False,
                 )
@@ -150,12 +176,13 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
                 else:
                     return json.dumps(
                         {
+                            "success": False,
                             "chunks": [
                                 {
                                     "output_type": "text",
                                     "content": f"File not found: {file_path}",
                                 }
-                            ]
+                            ],
                         },
                         ensure_ascii=False,
                     )
@@ -167,12 +194,13 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
             except Exception as e:
                 return json.dumps(
                     {
+                        "success": False,
                         "chunks": [
                             {
                                 "output_type": "text",
                                 "content": f"Error reading file: {e}",
                             }
-                        ]
+                        ],
                     },
                     ensure_ascii=False,
                 )
@@ -187,9 +215,10 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
         if not html or not html.strip():
             return json.dumps(
                 {
+                    "success": False,
                     "chunks": [
                         {"output_type": "text", "content": "No HTML content provided"}
-                    ]
+                    ],
                 },
                 ensure_ascii=False,
             )
@@ -233,7 +262,7 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
         # Auto-append missing images
         try:
             gen_images = react_state.get("generated_images", [])
-            if gen_images:
+            if gen_images and factual_summary is None:
                 html_img_stems = set(
                     re.sub(r"^[0-9a-f]+_", "", os.path.basename(src))
                     for src in re.findall(
@@ -274,17 +303,63 @@ def make_html_interpreter(react_state: Dict[str, Any], skills_dir: str):
         except Exception:
             pass
 
+        missing: List[str] = []
+        if not all(
+            tag in fixed_html.casefold()
+            for tag in ("<html", "</html>", "<body", "</body>")
+        ):
+            missing.append("HTML 必须包含完整的 html 和 body 标签")
+        if react_state.get("requires_database_profile"):
+            profile = react_state.get("database_profile")
+            if not profile:
+                missing.append("先调用 database_profile 获取真实数据库画像")
+            else:
+                # Data may be in a table or in the script powering interactive views.
+                normalized = re.sub(r"[,，\s]", "", unescape(fixed_html)).casefold()
+                for table in profile["tables"]:
+                    required = [table["name"]]
+                    required.extend(c["name"] for c in table["columns"])
+                    required.extend(c["type"] for c in table["columns"])
+                    count_present = re.search(
+                        rf"(?<!\d){table['row_count']}(?!\d)", normalized
+                    )
+                    if not count_present or any(
+                        re.sub(r"[,，\s]", "", item).casefold() not in normalized
+                        for item in required
+                    ):
+                        missing.append(f"报告缺少 {table['name']} 的字段、类型或行数")
+
+        from .sql_query import _save_result
+
+        # Save HTML separately from SQL data, within the existing session-file root.
+        report_path = _save_result(react_state, fixed_html, "report", suffix=".html")
+        relative_path = f"{react_state.get('conv_id') or 'default'}/{report_path.name}"
+        report_url = "/api/v1/agent/files/download?file_path=" + quote(relative_path)
+        react_state["rendered_report"] = {
+            "path": str(report_path),
+            "url": report_url,
+            "missing": missing,
+            **({"summary": factual_summary, "result_ids": result_ids} if factual_summary else {}),
+        }
+        message = (
+            ("报告交付检查未通过：" + "；".join(missing))
+            if missing
+            else ("HTML 报告已生成并发送到预览面板。全部目标达成后可 terminate。")
+        )
         chunks: List[Dict[str, Any]] = [
             {
                 "output_type": "text",
-                "content": (
-                    "✅ HTML 报告已成功渲染并展示给用户。报告任务已完成，"
-                    "请勿重复调用 html_interpreter 生成报告。"
-                    "若全部目标已达成，请直接调用 terminate 结束。"
-                ),
+                "content": message + f"\n[查看报告]({report_url})",
             },
             {"output_type": "html", "content": fixed_html, "title": title},
         ]
-        return json.dumps({"chunks": chunks}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "success": not missing,
+                "error": message if missing else None,
+                "chunks": chunks,
+            },
+            ensure_ascii=False,
+        )
 
     return html_interpreter

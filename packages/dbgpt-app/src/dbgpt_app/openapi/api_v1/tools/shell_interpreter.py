@@ -69,11 +69,13 @@ def make_shell_interpreter(react_state: Dict[str, Any]):
         )
 
         output_text = ""
+        succeeded = False
         try:
             session = await runtime.create_session(session_id, config)
             result = await session.execute(code)
 
             if result.status == ExecutionStatus.SUCCESS:
+                succeeded = True
                 output_text = result.output or ""
             elif result.status == ExecutionStatus.TIMEOUT:
                 output_text = f"Execution timed out ({config.timeout}s limit)"
@@ -195,6 +197,6 @@ def make_shell_interpreter(react_state: Dict[str, Any]):
                         "shell_interpreter: image post-processing failed: %s", e
                     )
 
-        return json.dumps({"chunks": chunks}, ensure_ascii=False)
+        return json.dumps({"success": succeeded, "chunks": chunks}, ensure_ascii=False)
 
     return shell_interpreter

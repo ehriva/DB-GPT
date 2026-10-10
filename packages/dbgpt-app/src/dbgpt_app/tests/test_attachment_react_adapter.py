@@ -1186,11 +1186,21 @@ async def test_chat_react_agent_closes_attachments_when_stream_response_init_fai
     record = _ingest(registry)
 
     captured = {}
+    closes = {"count": 0}
     original_prepare = agentic_data_api.prepare_react_attachments
 
     async def spy_prepare(dialogue, *, owner_id, registry=None):
         ctx = await original_prepare(dialogue, owner_id=owner_id, registry=registry)
         captured["ctx"] = ctx
+        # Count closes so the failure path can be asserted to clean up the
+        # turn files it already materialized exactly once.
+        original_close = ctx.close
+
+        def counting_close():
+            closes["count"] += 1
+            original_close()
+
+        ctx.close = counting_close
         return ctx
 
     monkeypatch.setattr(agentic_data_api, "prepare_react_attachments", spy_prepare)
@@ -1198,13 +1208,16 @@ async def test_chat_react_agent_closes_attachments_when_stream_response_init_fai
     real_streaming_response = agentic_data_api.StreamingResponse
     attempts = {"count": 0}
 
-    def flaky_streaming_response(*args, **kwargs):
+    def exploding_streaming_response(*args, **kwargs):
         attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise RuntimeError("stream init exploded")
-        return real_streaming_response(*args, **kwargs)
+        raise RuntimeError("stream init exploded")
 
-    monkeypatch.setattr(agentic_data_api, "StreamingResponse", flaky_streaming_response)
+    # Streaming response construction is the failure seam here. The endpoint
+    # does not retry: it surfaces the error as a stream and drops the
+    # attachments materialized for this turn.
+    monkeypatch.setattr(
+        agentic_data_api, "_AgentStreamingResponse", exploding_streaming_response
+    )
 
     response = await agentic_data_api.chat_react_agent(
         _dialogue({"file_ids": [record.file_id]}),
@@ -1212,7 +1225,10 @@ async def test_chat_react_agent_closes_attachments_when_stream_response_init_fai
     )
 
     assert isinstance(response, real_streaming_response)
-    assert attempts["count"] == 2
+    assert attempts["count"] == 1
+    body = "".join([chunk async for chunk in response.body_iterator])
+    assert "stream init exploded" in body
+    assert closes["count"] == 1
     ctx = captured["ctx"]
     assert ctx is not None
     for local_path in ctx.local_paths.values():
@@ -1237,18 +1253,22 @@ async def test_chat_knowledge_agent_closes_attachments_exactly_once_when_stream_
     real_streaming_response = agentic_data_api.StreamingResponse
     attempts = {"count": 0}
 
-    def flaky_streaming_response(*args, **kwargs):
+    def exploding_streaming_response(*args, **kwargs):
         attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise RuntimeError("stream init exploded")
-        return real_streaming_response(*args, **kwargs)
+        raise RuntimeError("stream init exploded")
 
-    monkeypatch.setattr(agentic_data_api, "StreamingResponse", flaky_streaming_response)
+    # Same failure seam as the ReAct endpoint: no retry, error stream returned,
+    # attachments closed exactly once.
+    monkeypatch.setattr(
+        agentic_data_api, "_AgentStreamingResponse", exploding_streaming_response
+    )
 
     response = await agentic_data_api.chat_knowledge_agent(
         _dialogue({}), UserRequest(user_id=OWNER)
     )
 
     assert isinstance(response, real_streaming_response)
-    assert attempts["count"] == 2
+    assert attempts["count"] == 1
+    body = "".join([chunk async for chunk in response.body_iterator])
+    assert "stream init exploded" in body
     assert closable.closed == 1

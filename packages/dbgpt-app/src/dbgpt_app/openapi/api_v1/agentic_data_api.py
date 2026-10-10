@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import (
     APIRouter,
     Body,
@@ -52,15 +53,35 @@ from .attachment_react_adapter import (
     resolve_legacy_chat_file_path,
     scrub_react_history_for_share,
 )
-from .react_final import AgentFinalAnswer, FinalAnswerAssembler
+from .react_final import AgentFinalAnswer, FinalAnswerAssembler, TaskResult
+from .react_task import (
+    TaskReActAgent,
+    incomplete_summary,
+    report_requirements,
+    task_result_for_reply,
+)
 from .subagent.dispatcher import DISPATCH_PROMPT_SECTION, make_dispatch_tool
 from .subagent.history import (
     build_subagent_history_snapshot,
     fail_running_subagent_history,
     update_subagent_history,
 )
+from .terms.api import router as terms_router
+from .terms.service import (
+    TermClarifier,
+    contains_term,
+    explanation_only_request,
+    install_execution_guards,
+    legacy_ratio_names,
+    make_clarify_term,
+    make_json_llm,
+    record_term_check_failure,
+    requirements_from_input,
+    term_scope_description,
+)
 
 router = APIRouter()
+router.include_router(terms_router)
 CFG = Config()
 logger = logging.getLogger(__name__)
 
@@ -572,7 +593,7 @@ def _install_skill_from_dir(src_dir: Path, skill_name: str, user_dir: Path) -> s
         shutil.rmtree(dest)
     shutil.copytree(src_dir, dest)
     # Return path relative to skills_dir (parent of user_dir)
-    return str(dest.relative_to(user_dir.parent))
+    return dest.relative_to(user_dir.parent).as_posix()
 
 
 @router.post("/v1/skills/upload", response_model=Result)
@@ -646,7 +667,7 @@ async def skill_upload(
 
             target_file.write_bytes(content_bytes)
 
-            rel_path = str(dest.relative_to(skills_dir))
+            rel_path = dest.relative_to(skills_dir).as_posix()
 
         return Result.succ(
             {
@@ -1044,6 +1065,10 @@ def _build_react_history_payload(
     sub_agents: Any,
     input_files: List[Dict[str, Any]],
     citations: Optional[List[Dict[str, Any]]] = None,
+    task_result: Optional[TaskResult] = None,
+    term_definitions: Optional[List[Dict[str, Any]]] = None,
+    task_requirements: Optional[Dict[str, Any]] = None,
+    resource_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Serialize the persisted react-agent history payload (version 2).
 
@@ -1065,6 +1090,13 @@ def _build_react_history_payload(
             "generated_images": generated_images,
             "sub_agents": sub_agents,
             "input_files": input_files,
+            "term_definitions": term_definitions or [],
+            **({"task_requirements": task_requirements} if task_requirements is not None else {}),
+            **({"resource_context": {"database": (
+                {"name": resource_context["database"]["name"], "type": resource_context["database"]["type"]}
+                if resource_context.get("database") else None
+            )}} if resource_context is not None else {}),
+            **({"task_result": task_result.to_dict()} if task_result else {}),
         },
         ensure_ascii=False,
     )
@@ -1135,12 +1167,14 @@ async def _react_agent_stream(
         attachment_ctx: Pre-resolved attachment context for this turn (or
             ``None`` for pure-text / legacy ``file_path`` requests).
     """
+    inner_stream = _react_agent_stream_inner(dialogue, tool_mode, attachment_ctx)
     try:
-        async for event in _react_agent_stream_inner(
-            dialogue, tool_mode, attachment_ctx
-        ):
+        async for event in inner_stream:
             yield event
     finally:
+        # Explicitly close nested generators; async-for alone does not own them.
+        with anyio.CancelScope(shield=True):
+            await inner_stream.aclose()
         if attachment_ctx is not None:
             try:
                 attachment_ctx.close()
@@ -1217,13 +1251,14 @@ async def _react_agent_stream_inner(
     agent_task_holder: List["asyncio.Task[Any]"] = []
     final_emitted = False
     done_emitted = False
+    implementation = _react_agent_stream_impl(
+        dialogue,
+        tool_mode=tool_mode,
+        attachment_ctx=attachment_ctx,
+        agent_task_holder=agent_task_holder,
+    )
     try:
-        async for event in _react_agent_stream_impl(
-            dialogue,
-            tool_mode=tool_mode,
-            attachment_ctx=attachment_ctx,
-            agent_task_holder=agent_task_holder,
-        ):
+        async for event in implementation:
             event_type = _sse_event_type(event)
             final_emitted = final_emitted or event_type == "final"
             done_emitted = done_emitted or event_type == "done"
@@ -1233,14 +1268,17 @@ async def _react_agent_stream_inner(
         if not final_emitted and not done_emitted:
             yield _sse_event(
                 AgentFinalAnswer(
-                    content="抱歉，回答生成过程中发生错误，请重试。"
+                    content="执行发生错误，任务未完成，请重试。",
+                    task_result=TaskResult("failed", "runtime_error"),
                 ).to_sse_payload()
             )
         if not done_emitted:
             yield _sse_event({"type": "done"})
     finally:
-        if agent_task_holder:
-            await _cancel_and_await_agent_task(agent_task_holder[0])
+        with anyio.CancelScope(shield=True):
+            await implementation.aclose()
+            if agent_task_holder:
+                await _cancel_and_await_agent_task(agent_task_holder[0])
 
 
 class _AgentStreamingResponse(StreamingResponse):
@@ -1282,7 +1320,6 @@ async def _react_agent_stream_impl(
         GptsMemory,
     )
     from dbgpt.agent.expand.actions.react_action import Terminate
-    from dbgpt.agent.expand.tool_calling_agent import ToolCallingReActAgent
     from dbgpt.agent.resource import ToolPack
     from dbgpt.agent.resource.manage import get_resource_manager
     from dbgpt.agent.util.llm.llm import LLMConfig, LLMStrategyType
@@ -1617,7 +1654,23 @@ async def _react_agent_stream_impl(
         "matched": None,
         "skill_prompt": None,
         "file_path": file_path,
+        "term_datasource": database_name or "",
+        "resource_context": {"database": (
+            {"name": database_name, "type": dialogue.ext_info.get("database_type") or (
+                database_connector.dialect if database_connector else ""
+            )} if database_name else None
+        )},
+        "original_user_input": user_input,
+        "term_check_pending": tool_mode == "full",
+        "term_explanation_only": explanation_only_request(user_input),
     }
+    if tool_mode == "full":
+        from .tools.query_quality import require_explicit_ratio_results
+
+        require_explicit_ratio_results(react_state)
+    requires_report, requires_profile = report_requirements(user_input)
+    react_state["requires_report"] = requires_report and tool_mode == "full"
+    react_state["requires_database_profile"] = requires_profile and tool_mode == "full"
 
     # Pre-select skill if skill_name provided in ext_info
     pre_matched_skill = None
@@ -2096,6 +2149,7 @@ print(json.dumps(summary, ensure_ascii=False))
     # ── Import built-in tools from tools/ directory ──
     from dbgpt_app.openapi.api_v1.tools import (
         make_code_interpreter,
+        make_database_profile,
         make_execute_analysis,
         make_execute_skill_script_file,
         make_execute_tool,
@@ -2123,6 +2177,7 @@ print(json.dumps(summary, ensure_ascii=False))
 
     # ── Build tool instances from tools/ directory ───────────────────────
     _todo_list: List[Dict[str, str]] = []
+    react_state["task_plan"] = _todo_list
     # Reuse one visible plan card across all todowrite updates in this round.
     # The mutable single-item list acts as a closure cell.
     _todo_step_holder: List[str] = []
@@ -2151,10 +2206,11 @@ print(json.dumps(summary, ensure_ascii=False))
         # No knowledge space connected — use legacy knowledge_retrieve (no-op without resources)
         kb_tool_list = [make_knowledge_retrieve(react_state, knowledge_resources)]
     sql_query_tool = make_sql_query(react_state, database_connector)
+    database_profile_tool = make_database_profile(react_state, database_connector)
     code_interpreter_tool = make_code_interpreter(react_state)
     shell_interpreter_tool = make_shell_interpreter(react_state)
     html_interpreter_tool = make_html_interpreter(react_state, DEFAULT_SKILLS_DIR)
-    todowrite_tool = make_todowrite(_todo_list, stream_callback)
+    todowrite_tool = make_todowrite(_todo_list, stream_callback, react_state)
     question_tool = make_question(react_state, stream_callback)
     # read_file lets the agent read back persisted tool results / snapshots
     # from disk when a <persisted-output> block references a file path.
@@ -2335,6 +2391,12 @@ print(json.dumps(summary, ensure_ascii=False))
     else:
         llm_config = LLMConfig(llm_client=llm_client)
 
+    term_clarifier = TermClarifier(
+        react_state, stream_callback, make_json_llm(llm_client, dialogue.model_name),
+        database_connector=database_connector,
+    )
+    clarify_term_tool = make_clarify_term(term_clarifier)
+
     conv_id = dialogue.conv_uid or str(uuid.uuid4())
     react_state["conv_id"] = conv_id
     if attachment_ctx is not None:
@@ -2381,6 +2443,7 @@ print(json.dumps(summary, ensure_ascii=False))
     for _msg in storage_conv.get_history_message():
         if _msg.type == "human":
             historical_dialogues.append(AgentMessage(content=_msg.content))
+            react_state["previous_user_input"] = _msg.content
         elif _msg.type == "ai":
             historical_dialogues.append(AgentMessage(content=_msg.content))
         elif _msg.type == "view":
@@ -2392,6 +2455,31 @@ print(json.dumps(summary, ensure_ascii=False))
                 )
                 if isinstance(_payload, dict):
                     _content = _payload.get("final_content") or ""
+                    previous_resources = _payload.get("resource_context")
+                    previous_database = previous_resources.get("database") if isinstance(previous_resources, dict) else None
+                    react_state["previous_resource_context"] = {"database": (
+                        {"name": previous_database["name"], "type": previous_database["type"]}
+                        if isinstance(previous_database, dict) and isinstance(previous_database.get("name"), str)
+                        and isinstance(previous_database.get("type"), str) else None
+                    )}
+                    if isinstance(_payload.get("task_requirements"), dict):
+                        react_state["task_requirements"] = _payload["task_requirements"]
+                        react_state.pop("legacy_requirements_unresolved", None)
+                    for previous_term in _payload.get("term_definitions", []):
+                        if previous_term.get("datasource", "") == (database_name or ""):
+                            confirmed = react_state.setdefault("confirmed_terms", [])
+                            confirmed[:] = [t for t in confirmed if t["term"] != previous_term["term"]]
+                            confirmed.append(previous_term)
+                    if not isinstance(_payload.get("task_requirements"), dict):
+                        react_state["task_requirements"] = requirements_from_input(
+                            react_state.get("previous_user_input", ""),
+                            react_state.get("confirmed_terms", []), database_name or "",
+                        )
+                        react_state["legacy_requirements_unresolved"] = (
+                            not react_state["task_requirements"]["ratios"] and bool(legacy_ratio_names(
+                                react_state.get("previous_user_input", "")
+                            ))
+                        )
             except Exception:
                 pass
             if _content:
@@ -2404,7 +2492,7 @@ print(json.dumps(summary, ensure_ascii=False))
         language="zh",
         temperature=dialogue.temperature or 0.2,
         enable_context_management=True,
-        enable_native_function_calling=True,
+        enable_native_function_calling=False,
     )
 
     # file_ids requests use the public manifest block; legacy file_path and
@@ -2526,7 +2614,7 @@ documentation references them. When using template mode, provide ALL required
 placeholders in the `data` dictionary.
 5. If the task does not require generating a report, directly call terminate to
 return the final result. The Action Input format must be
-{{"result": "final answer"}}.
+{{"output": "final answer"}}.
 
 {skill_prompt_context}
 {execution_instruction}
@@ -2669,6 +2757,7 @@ Thought/Action/Action Input format shown above.
                     shell_interpreter_tool,
                     html_interpreter_tool,
                     sql_query_tool,
+                    database_profile_tool,
                     todowrite_tool,
                     question_tool,
                     Terminate(),
@@ -2704,7 +2793,7 @@ order, select as needed).
    -> Action Input.
 4. Wait for the system to return Observation before deciding on the next step.
 5. When the task is completed, call the terminate tool to return the final result.
-The Action Input format must be {{"result": "final answer"}}.
+The Action Input format must be {{"output": "final answer"}}.
 6. **[Mandatory Rule] If there is a requirement for an analysis report, you MUST call
 `html_interpreter` for HTML rendering. When the user requests generating a webpage,
 HTML report, or interactive report, the final presentation step must call
@@ -2827,7 +2916,7 @@ Parameters: {{"tasks": [{{"goal": "...", "context": "...", "title": "..."}}]}}
    Parameters: {{"questions": [{{"question": "...", "header": "...", "options": [
    {{"label": "...", "description": "..."}}, ...]}}]}}. Set multiple=true to allow
    multiple selections. The tool returns the user's selected answers.
-17. **terminate**: Finish the task. Parameters: {{"result": "final answer"}}
+17. **terminate**: Finish the task. Parameters: {{"output": "final answer"}}
 
 {file_context}
 {knowledge_context}
@@ -2881,6 +2970,7 @@ Thought/Action/Action Input format shown above.
                     shell_interpreter_tool,
                     html_interpreter_tool,
                     sql_query_tool,
+                    database_profile_tool,
                     read_file_tool,
                     todowrite_tool,
                     execute_tool_tool,
@@ -2893,6 +2983,23 @@ Thought/Action/Action Input format shown above.
             )
 
     # Debug: print all registered tools
+    if tool_mode == "full":
+        tool_pack.append(clarify_term_tool._tool)
+        install_execution_guards(tool_pack, react_state)
+        workflow_prompt += (
+            "\n17. **clarify_term**：已注册的可调用工具。"
+            "参数term是名词，reason是疑点，aspect默认meaning；计算口径使用formula。"
+            "该工具提供当前模型解释、等待用户确认并保存共享词库。"
+            "\n## 名词澄清\n系统在执行前检查名词。执行中发现新的多义词或口径疑点时，"
+            "调用 clarify_term(term, reason)，等待用户确认；取消或超时停止任务。"
+            "确认含义不代表数据库存在对应字段：继续检查口径和字段，缺数据要明确说明。"
+            "常见明确指标直接使用常规或用户指定口径，并在结果说明；公式未经人工确认不构成补问理由。平均销售单价默认销售金额除以销售数量，不是各行单价算术平均。只有实际存在且上下文无法解决的口径冲突才补问，并提供evidence。"
+            "采用用户指定、业务资料明确或前置筛选明确的定义；共享解释可由上下文确定，不因词库命中就询问。未知内部名词、无法确定的真实冲突仍需用户确认；缺数据明确说明，不让用户解释已知名词。"
+            "已经通过确认卡片确认的解释，不要在最终回答中再次要求确认。"
+            "不要用question重复询问已确认的名词含义；计算口径用clarify_term(aspect='formula')单独确认。"
+            "名词解释使用当前模型已有知识，不调用联网搜索；"
+            "不能用 shell、其他工具或网络请求绕过确认。"
+        )
     logger.info(f"ToolPack resources: {list(tool_pack._resources.keys())}")
     if "execute_skill_script" not in tool_pack._resources:
         logger.error("execute_skill_script NOT in ToolPack!")
@@ -2985,13 +3092,58 @@ Thought/Action/Action Input format shown above.
     # Convert workflow_prompt to PromptTemplate so it is used as system prompt
     # Use jinja2 format to avoid issues with JSON braces { } in the prompt
     workflow_prompt_template = PromptTemplate(
-        template=workflow_prompt,
+        template=workflow_prompt + """
+
+## Delivery and execution
+There is no fixed step count or total-duration deadline for this main task.
+Keep making progress until all requested deliverables exist. Individual tools
+and model requests have deadlines; fix recoverable errors and continue.
+For a database profile use database_profile first, then sql_query for aggregates.
+sql_query previews at most 50 rows and saves ALL returned rows as JSON.
+For an explicitly defined ratio, return the ratio plus its same-named numerator,
+denominator and missing_input_count (an actual NULL check of required source inputs).
+This is also required for Python calculations: print a final single-line JSON object
+with columns and rows containing these same fields. rows must be arrays in columns
+order, not dictionaries. source_result_ids are string result IDs returned by tools,
+not sales row numbers. For database cost calculations, first query unjoined sales
+details with source_sales_row_id for the selected customer/months. Cite that result
+in source_result_ids, and cite a validated joined detail result in joined_result_id;
+joined_sales_row_ids contains the actual joined sales row numbers, including missing
+cost rows. QUERY_RESULTS lists the available result IDs, file paths, columns and tables.
+Only the original full-population
+ratio can satisfy the request; a partial/subset ratio does not complete it.
+If inputs are missing, keep the full ratio NULL and missing_input_count positive.
+For ERP销售 joins to 材料单价/工费单价, return e.rowid AS source_sales_row_id
+in detail queries and ensure each source sales row occurs once. Aggregate joins
+must return source_sales_row_count and joined_sales_row_count for each group;
+use actual COUNT(DISTINCT e.rowid) and COUNT(*) to detect fanout. Deduplicate
+only identical cost mappings by their actual join keys and prices, never sales rows.
+Use SUM(row-level numerator)/SUM(denominator) for the same population. Do not let
+separate SUM operations skip different NULL rows. Check all required cost inputs
+before calculation; never treat missing costs as zero without user confirmation.
+If required inputs are missing, return a NULL complete ratio, show the missing count
+and available results, and state that complete delivery is unavailable. Python
+reads QUERY_RESULT_PATH as {'columns': [...], 'rows': [...]}; uploaded files
+remain in FILE_PATH. DATABASE_PROFILE_PATH contains the complete profile.
+Each Python call starts a fresh process. _run.py contains the current Python
+script; reading it does not discover database connections or data.
+For financial reports, call html_interpreter with result_ids containing the validated
+summary result and the real missing-input detail result, plus title. The renderer
+builds the full HTML document from those results. Do not generate, write or read an
+HTML file, and do not pass html, file_path, template_path or data for financial reports.
+For non-financial reports, generate a full HTML document via html_interpreter.
+Include table names, field names/types and actual row counts when a database profile
+is requested.
+If delivery validation fails, correct the stated omissions before terminate.
+Follow the user's selected scope. Do not load a skill when the user declines
+skills or when the available database facts already suffice for the request.
+""",
         input_variables=[],
         template_format="jinja2",
     )
 
     agent_builder = (
-        ToolCallingReActAgent(max_retry_count=30)
+        TaskReActAgent(task_state=react_state, max_retry_count=None, max_timeout=None)
         .bind(context)
         .bind(agent_memory)
         .bind(llm_config)
@@ -3020,12 +3172,105 @@ Thought/Action/Action Input format shown above.
     )
 
     async def run_agent():
-        return await agent.generate_reply(
-            received_message=received,
-            sender=agent,
-            stream_callback=stream_callback,
-            historical_dialogues=historical_dialogues,
-        )
+        try:
+            if tool_mode == "full":
+                await stream_callback("term.check.start", {})
+                try:
+                    business_context = ""
+                    if knowledge_resources:
+                        retrieve_terms = make_knowledge_retrieve(react_state, knowledge_resources)
+                        business_context = await retrieve_terms(user_input)
+                    ready = await term_clarifier.preflight(user_input, database_context, business_context)
+                except Exception as error:
+                    record_term_check_failure(react_state, error)
+                    ready = False
+                if not ready:
+                    return AgentMessage(
+                        content="必要名词未确认，任务未完成。", success=False,
+                        context={"termination_reason": react_state.get("term_stop_reason", "term_unresolved")},
+                    )
+                if react_state.get("confirmed_terms"):
+                    react_state["term_explanation_only"] = react_state["term_explanation_only"] and any(
+                        contains_term(user_input, name)
+                        for term in react_state["confirmed_terms"]
+                        for name in [term["term"], *term.get("aliases", [])]
+                    )
+                    scope_note = (
+                        "本次仅需说明名词含义，不做实际数据计算；计算口径未确认不妨碍解释，"
+                        "不要额外要求确认公式。"
+                        if react_state["term_explanation_only"] else
+                        "按用户确认或上下文明确的定义和口径继续，并说明口径；不要因公式未人工确认重复问。仅发现新的实际冲突且上下文无法消除时，使用clarify_term，aspect设为formula并提供evidence。"
+                    )
+                    received.content = (
+                        "以下名词已通过前置筛选，包含用户确认项和上下文明确自动采用项；adopted_by=context表示自动采用，不要宣称用户确认了它。"
+                        "用户选择或确认的项目也不能描述为自动采用；按实际确认记录说明来源，不推断确认方式。"
+                        "adopted_by=user表示用户已选择或确认含义；来源以本次快照字段为准，不能让旧回答的自然语言描述覆盖确认记录。"
+                        "不要因原文要求先选择而重复提问，按本次定义继续；出现新的实际冲突时再澄清。"
+                        + scope_note
+                        + "请继续原始需求的后续工作。\n原始需求：\n"
+                        + user_input
+                        + "\n\n本次采用的定义、口径及依据（包含自动采用项）：\n"
+                        + json.dumps(react_state["confirmed_terms"], ensure_ascii=False)
+                    )
+                await stream_callback("term.check.done", {})
+                requirements = react_state.get("task_requirements", {})
+                received.content += "\n\n当前任务交付要求（继续任务时已继承，不能因取消计划步骤删除）：\n" + json.dumps(requirements, ensure_ascii=False)
+                if requirements.get("ratios"):
+                    from .tools.query_quality import ratio_delivery_hint
+
+                    received.content += (
+                        "\n本次是结构化财务计算。先完成SQL/Python结果校验，再生成报告。"
+                        "不能只打印已格式化摘要；Python最终必须打印单行columns/rows JSON，"
+                        "数值不提前round，完整指标缺输入时NULL并返回实际missing_input_count。"
+                        "SQL与Python返回的实际result_id才可供html_interpreter引用。"
+                        "财务报告只传result_ids和title，html为空；不要自行写HTML或模板中的数值。"
+                        "缺失销售明细需source_sales_row_id、期间、产品编码及实际成本字段；"
+                        "报告同时选择完整汇总结果和明细结果。"
+                        "默认缺数据的说明属于交付，不要求补齐工费；仍需完成报告。\n"
+                        + (ratio_delivery_hint(react_state) or "")
+                    )
+            if react_state.get("requires_database_profile"):
+                await stream_callback("database.profile.start", {})
+                profile_result = json.loads(await database_profile_tool())
+                profile_text = "\n".join(
+                    str(chunk["content"])
+                    for chunk in profile_result.get("chunks", [])
+                )
+                workflow_prompt_template.template += (
+                    "\n## 已获取的真实数据库画像\n" + profile_text +
+                    "\n画像事实已由系统获取。直接据此生成所需报告，"
+                    "无需寻找连接、重复导出明细或加载无关技能。"
+                ) if profile_result.get("success") else (
+                    "\n## 数据库画像获取失败\n" + profile_text
+                )
+                await stream_callback("database.profile.result", profile_result)
+            return await agent.generate_reply(
+                received_message=received,
+                sender=agent,
+                stream_callback=stream_callback,
+                historical_dialogues=historical_dialogues,
+            )
+        except asyncio.CancelledError:
+            cancelled_result = TaskResult("cancelled", "user_cancelled")
+            steps = list(history_steps)
+            if current_history_step is not None:
+                steps.append({**current_history_step, "status": "failed"})
+            fail_running_subagent_history(subagent_history)
+            payload = _build_react_history_payload(
+                final_content="任务已取消，已完成的步骤和文件已保留。",
+                steps=steps,
+                task_plan=list(_todo_list),
+                generated_images=react_state.get("generated_images", []),
+                sub_agents=build_subagent_history_snapshot(subagent_history),
+                input_files=input_files_snapshot,
+                task_result=cancelled_result,
+                task_requirements=react_state.get("task_requirements"),
+                resource_context=react_state.get("resource_context"),
+            )
+            _react_terminal_events(storage_conv, payload, AgentFinalAnswer(
+                content="任务已取消。", task_result=cancelled_result
+            ))
+            raise
 
     agent_task = asyncio.create_task(run_agent())
     if agent_task_holder is not None:
@@ -3085,6 +3330,7 @@ Thought/Action/Action Input format shown above.
         history_steps.append(current_history_step)
         current_history_step = None
 
+    profile_step_id: Optional[str] = None
     while True:
         if agent_task.done() and stream_queue.empty():
             break
@@ -3094,10 +3340,30 @@ Thought/Action/Action Input format shown above.
             continue
 
         event_type = event.get("type")
-        if event_type == "context.status":
+        if event_type == "database.profile.start":
+            profile_step_id, profile_start = build_step(
+                "database_profile", "获取表结构、字段类型和实际行数"
+            )
+            current_history_step = {
+                "id": profile_step_id, "title": "database_profile",
+                "action": "database_profile", "status": "running", "outputs": [],
+            }
+            yield profile_start
+        elif event_type == "database.profile.result" and profile_step_id:
+            profile_status = "done" if event.get("success") else "failed"
+            for chunk in event.get("chunks", []):
+                yield step_chunk(profile_step_id, chunk["output_type"], chunk["content"])
+            yield step_done(profile_step_id, profile_status)
+            if current_history_step is not None:
+                current_history_step["outputs"] = event.get("chunks", [])
+                current_history_step["status"] = profile_status
+                history_steps.append(current_history_step)
+                current_history_step = None
+        elif event_type == "context.status":
             # Forward context-management status to frontend as-is.
             yield _sse_event(event)
-        elif event_type in ("question.asked", "question.replied", "question.rejected"):
+        elif event_type in ("question.asked", "question.replied", "question.rejected",
+                            "term.check.start", "term.check.done", "term.confirmed"):
             # Forward human-in-the-loop question events to frontend as-is.
             yield _sse_event(event)
         elif event_type in (
@@ -3517,6 +3783,7 @@ Thought/Action/Action Input format shown above.
         reply = await agent_task
     except Exception as e:
         err_msg = f"React agent failed: {e}"
+        error_result = TaskResult("failed", "runtime_error")
         fail_running_subagent_history(subagent_history)
         error_payload = _build_react_history_payload(
             final_content=err_msg,
@@ -3526,16 +3793,22 @@ Thought/Action/Action Input format shown above.
             sub_agents=build_subagent_history_snapshot(subagent_history),
             input_files=input_files_snapshot,
             citations=[],
+            task_result=error_result,
+            task_requirements=react_state.get("task_requirements"),
+            resource_context=react_state.get("resource_context"),
         )
         for terminal_event in _react_terminal_events(
             storage_conv,
             error_payload,
-            AgentFinalAnswer(content=err_msg),
+            AgentFinalAnswer(content=err_msg, task_result=error_result),
         ):
             yield terminal_event
         return
 
-    if reply.action_report and reply.action_report.terminate:
+    task_result = task_result_for_reply(reply, react_state)
+    if task_result.warnings:
+        yield _sse_event({"type": "plan.update", "tasks": list(_todo_list)})
+    if task_result.status == "succeeded" and reply.action_report:
         raw_content = reply.action_report.content or ""
         # The terminate ActionOutput.content may be the raw ReAct text, e.g.:
         # "Thought: ...\nAction: terminate\nAction Input: {"result": "..."}"
@@ -3554,8 +3827,8 @@ Thought/Action/Action Input format shown above.
                         parsed_input = parse_or_raise_error(action_input)
                     else:
                         parsed_input = action_input
-                    if isinstance(parsed_input, dict) and "result" in parsed_input:
-                        final_content = parsed_input["result"]
+                    if isinstance(parsed_input, dict):
+                        final_content = Terminate.final_content(parsed_input)
         except Exception:
             pass
         # native function calling 路径：terminate content 可能是 {"result":...}
@@ -3563,47 +3836,37 @@ Thought/Action/Action Input format shown above.
         if final_content == raw_content:
             try:
                 _parsed = json.loads(raw_content)
-                if isinstance(_parsed, dict) and "result" in _parsed:
-                    final_content = _parsed["result"]
+                if isinstance(_parsed, dict):
+                    final_content = Terminate.final_content(_parsed)
             except Exception:
                 try:
                     import ast
 
                     _parsed = ast.literal_eval(raw_content)
-                    if isinstance(_parsed, dict) and "result" in _parsed:
-                        final_content = _parsed["result"]
+                    if isinstance(_parsed, dict):
+                        final_content = Terminate.final_content(_parsed)
                 except Exception:
                     pass
-    elif reply.action_report:
-        # Loop ended without terminate (max retries or timeout).
-        # reply.content is raw LLM output containing ReAct prefixes.
-        # Try to extract a clean summary from the last step's thought.
-        raw = reply.content or reply.action_report.content or ""
-        final_content = raw
-        try:
-            steps = parser.parse(raw)
-            if steps:
-                last_step = steps[-1]
-                # Prefer observation (execution result) > thought
-                if last_step.observations:
-                    final_content = last_step.observations
-                elif last_step.thoughts:
-                    final_content = last_step.thoughts
-        except Exception:
-            pass
-        # Fallback: strip remaining ReAct prefixes via regex
-        final_content = re.sub(
-            r"^(Thought|Action|Action Input|Observation|Phase):\s*",
-            "",
-            final_content,
-            flags=re.MULTILINE,
-        ).strip()
-        if not final_content:
-            final_content = "任务执行已达到最大步数限制，请查看上方各步骤的执行结果。"
     else:
-        final_content = reply.content or ""
+        final_content = incomplete_summary(task_result, react_state)
 
-    final_answer = final_answer_assembler.finalize(final_content)
+    report = react_state.get("rendered_report")
+    if task_result.status == "succeeded" and report and report.get("summary"):
+        final_content = report["summary"]
+    if task_result.status == "succeeded" and report:
+        final_content += f"\n\n[查看报告]({report['url']})"
+
+    terms = react_state.get("confirmed_terms", [])
+    if terms:
+        final_content += "\n\n本次采用的名词解释：\n" + "\n".join(
+            f"- {t['term']}：{t['definition']}；{term_scope_description(t, markdown=True)}"
+            + ("；来源：模型理解，未经资料核验" if t.get("source_type") == "model" else "")
+            + ("（已保存到共享术语库）" if t.get("saved") else "（仅本次使用）")
+            + (f"；{t['save_error']}" if t.get("save_error") else "")
+            for t in terms
+        )
+
+    final_answer = final_answer_assembler.finalize(final_content, task_result)
 
     # Persist AI reply with structured history payload
     history_payload = _build_react_history_payload(
@@ -3614,6 +3877,10 @@ Thought/Action/Action Input format shown above.
         sub_agents=build_subagent_history_snapshot(subagent_history),
         input_files=input_files_snapshot,
         citations=[citation.to_dict() for citation in final_answer.citations],
+        task_result=task_result,
+        term_definitions=terms,
+        task_requirements=react_state.get("task_requirements"),
+        resource_context=react_state.get("resource_context"),
     )
     for terminal_event in _react_terminal_events(
         storage_conv,
@@ -3974,6 +4241,8 @@ async def chat_knowledge_agent(
 
 class _QuestionReplyBody(_BaseModel):
     answers: List[List[str]]
+    conv_id: Optional[str] = None
+    decisions: Dict[str, Any] = {}
 
 
 @router.post("/v1/chat/question/{request_id}/reply", response_model=Result)
@@ -3986,22 +4255,27 @@ async def question_reply(
     from dbgpt_app.openapi.api_v1.tools.question_manager import question_manager
 
     try:
-        question_manager.reply(request_id, body.answers)
+        question_manager.reply(request_id, body.answers, body.conv_id, body.decisions)
         return Result.succ({"success": True, "request_id": request_id})
     except KeyError as e:
         return Result.failed(msg=str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @router.post("/v1/chat/question/{request_id}/reject", response_model=Result)
 async def question_reject(
     request_id: str,
+    conv_id: Optional[str] = Query(None),
     user_token: UserRequest = Depends(get_user_from_headers),
 ):
     """User dismisses a pending question, unblocking the agent tool with rejection."""
     from dbgpt_app.openapi.api_v1.tools.question_manager import question_manager
 
     try:
-        question_manager.reject(request_id)
+        question_manager.reject(request_id, conv_id)
         return Result.succ({"success": True, "request_id": request_id})
     except KeyError as e:
         return Result.failed(msg=str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
