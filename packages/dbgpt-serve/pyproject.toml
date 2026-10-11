@@ -24,9 +24,11 @@ Issues = "https://github.com/eosphoros-ai/DB-GPT/issues"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = []
+
 [tool.uv]
 managed = true
-dev-dependencies = []
 
 [project.optional-dependencies]
 libro = ["libro>=0.1.25"]

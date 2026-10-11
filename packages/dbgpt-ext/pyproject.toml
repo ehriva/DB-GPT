@@ -90,11 +90,13 @@ file_s3 = [
     "boto3"
 ]
 
-[tool.uv]
-managed = true
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.3.4",
 ]
+
+[tool.uv]
+managed = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dbgpt_ext"]

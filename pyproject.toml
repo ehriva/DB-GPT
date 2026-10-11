@@ -39,9 +39,8 @@ members = [
   "packages/dbgpt-accelerator/dbgpt-acc*",
 ]
 
-[tool.uv]
-managed = true
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pip",
     "tomli>=2.0.2",
     "tomli-w>=1.1.0",
@@ -58,6 +57,10 @@ dev-dependencies = [
     "pre-commit>=4.2.0",
     "mypy>=1.15.0",
 ]
+
+
+[tool.uv]
+managed = true
 
 
 [tool.pytest.ini_options]

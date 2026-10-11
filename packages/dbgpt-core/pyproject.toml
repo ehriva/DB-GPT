@@ -170,9 +170,11 @@ hf_qwen2vl = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = []
+
 [tool.uv]
 managed = true
-dev-dependencies = []
 default-groups = ["dev"]
 
 conflicts = [

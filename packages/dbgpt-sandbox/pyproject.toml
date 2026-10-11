@@ -38,9 +38,11 @@ dev = [
     "flake8>=4.0",
 ]
 
+[dependency-groups]
+dev = []
+
 [tool.uv]
 managed = true
-dev-dependencies = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dbgpt_sandbox"]
